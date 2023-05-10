@@ -61,6 +61,7 @@ os.environ["PATH"] += os.pathsep + str(tools_root / 'third_party')
 args = argparse.Namespace()
 
 default_args = {
+    'gradetree_depth': 0,  # used in `bt run`
     'jobs': os.cpu_count() // 2,
     'time': 600,  # Used for `bt fuzz`
     'verbose': 0,

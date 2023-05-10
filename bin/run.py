@@ -1,6 +1,7 @@
 import os
 import sys
 
+from testgroups import Grades
 import config
 import validate
 import program
@@ -463,12 +464,14 @@ class Submission(program.Program):
 
         verdict = (-100, 'ACCEPTED', 'ACCEPTED', 0)  # priority, verdict, print_verdict, duration
         verdict_run = None
+        all_results = {}
 
         def process_run(run, p):
             nonlocal max_duration, verdict, verdict_run
 
             localbar = bar.start(run)
             result = run.run()
+            all_results[run.name] = result
 
             new_verdict = (
                 config.PRIORITY[result.verdict],
@@ -557,6 +560,11 @@ class Submission(program.Program):
         printed_newline = bar.finalize(
             message=f'{max_duration:6.3f}s {color}{self.print_verdict:<20}{Style.RESET_ALL} @ {verdict_run.testcase.name}'
         )
+
+        grades = Grades(all_results)
+        if self.verdict != grades.verdict():
+            warn("Default grader got {grades.verdict()}")
+        grades.prettyprint_tree(maxdepth=config.args.gradetree_depth)
 
         return (self.verdict in self.expected_verdicts, printed_newline)
 

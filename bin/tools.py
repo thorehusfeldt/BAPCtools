@@ -613,6 +613,11 @@ Run this from one of:
         action='store_true',
         help='Skip sanity checks on testcases.',
     )
+    runparser.add_argument(
+        '--gradetree-depth',
+        type=int,
+        help='Depth of gradetree shown.',
+    )
 
     # Test
     testparser = subparsers.add_parser(
