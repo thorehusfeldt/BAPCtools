@@ -39,6 +39,7 @@ class Problem:
         self._program_callbacks = dict()
         # Dictionary from path to parsed file contents.
         self._testdata_yamls = dict()
+        self._expected_grades = self._get_expected_grades_yaml()
 
         # The label for the problem: A, B, A1, A2, X, ...
         self.label = label
@@ -641,3 +642,16 @@ class Problem:
                 )
 
         return Path('/') / solution.relative_to(problem.path)
+
+    def _get_expected_grades_yaml(self):
+        yaml_path = self.path / 'submissions/expected_grades.yaml'
+        if not yaml_path.is_file():
+            return None
+        yaml = read_yaml(yaml_path)
+        return { Path(k): v for k, v in yaml.items() }
+
+    def _expected_grades_for_submission(self, submission):
+        """ submission: a Submission object
+            return the expected grades for the givens submission (as a dict indexed by strings)
+        """
+        return self._expected_grades.get(submission.short_path) if self._expected_grades is not None else {}

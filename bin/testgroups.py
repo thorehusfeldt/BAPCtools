@@ -7,11 +7,11 @@
     - grade: a tuple of (verdict, score)
     - (test case) result: a util.ExecResult, it has result.verdict
 
-    - testdata tree: the tree given by the full filenames in data
-    - testdata group: an *internal* node in the test data tree (spec is unclear about this)
+    - testdatatree: the tree given by the full filenames in data
+    - testgroup: an *internal* node in the test data tree (spec is unclear about this)
     - testcase: a leaf of the test data tree
 
-    The verdict of the grade at the root of the testdata tree is the final verdict of the
+    The verdict of the grade at the root of the testdatatree is the final verdict of the
     default grader on all the testdata.
 """
 
@@ -19,12 +19,45 @@ import re
 import subprocess
 from pathlib import PurePath
 
-from util import log, error, debug
+from util import log, warn, error, debug
+from colorama import Fore, Style
 import config
 
 
+short_verdict = {
+    'ACCEPTED': 'AC',
+    'WRONG_ANSWER': 'WA',
+    'JUDGE_ERROR': 'JE',
+    'TIME_LIMIT_EXCEEDED': 'TLE',
+    'RUN_TIME_ERROR': 'RTE',
+}
+long_verdict = {v: k for k, v in short_verdict.items()}
+
+# pylint: disable=too-few-public-methods
+class TestDataTree:
+    """The tree for all testcases and testgroups of a problem (in fact, the run or a problem).
+    This forms a tree defined by self.children[node], leaves are testcases.
+    Tree nodes are identified by pathlib.PurePath objects,
+    the root is self.root == PurePath('.') whose children (if they exist) are
+    PurePath('sample') and PurePath('secret')
+    """
+
+    def __init__(self, testcasepaths):
+        """testcases is an iterable of pathlib.Paths"""
+
+        self.root = PurePath('.')
+
+        # Build tree structure of testcases and test(sub)groups
+        self.leaves = set(testcasepaths)
+        self.children = {node: [] for node in set(p for tc in self.leaves for p in tc.parents)}
+        self.nodes = self.leaves | set(self.children.keys())
+        for node in self.nodes:
+            if node != self.root:
+                self.children[node.parent].append(node)
+
+
 class Grades:
-    """The grades for all testcases and testgroups of a submission.
+    """The grades for all testcases and testgroups of a list of test results
     This forms a tree defined by self.children[node], leaves are testcases.
     Tree nodes are identified by pathlib.PurePath objects,
     the root is self.root == PurePath('.') whose children (if they exist) are
@@ -32,49 +65,57 @@ class Grades:
 
     self.grade[node] is the grade determined by the default grader for a node in the testdata tree.
     self.verdict = the final verdict at the root
+    self.expectations[node] is None or a list of verdicts, such as ["AC"]
     """
 
     def __init__(self, tcresults):
         """tcresults is a dict of util.ExecResult objects indexed by testcase name"""
-        self.root = PurePath('.')
+
+        self.tree: TestDataTree = TestDataTree(PurePath(tc) for tc in tcresults)
 
         # self.grade for the leaves is just the verdict in ExecResult,
         # We hard-code score is 1 for AC, 0 for everything else
-        self.grade = {
+        self.grades = {
             PurePath(tc): (result.verdict, int(result.verdict == 'ACCEPTED'))
             for tc, result in tcresults.items()
         }
 
-        # Build tree structure of testcases and test(sub)groups
-        self.testcases = set(self.grade.keys())
-        self.children = {node: [] for node in set(p for tc in self.testcases for p in tc.parents)}
-        for node in self.testcases | self.children.keys():
-            if node != self.root:
-                self.children[node.parent].append(node)
-
         # compute the grade for each internal node recursively from the root
-        self.grade[self.root] = self._grade_recursively(self.root)
+        self.grades[self.tree.root] = self._grade_recursively(self.tree.root)
+        self.expectations = None
 
     def _grade_recursively(self, node):
-        if node not in self.grade:
-            grades = [self._grade_recursively(c) for c in self.children[node]]
-            self.grade[node] = aggregate(node, grades)
-        return self.grade[node]
+        if node not in self.grades:
+            grades = [self._grade_recursively(c) for c in self.tree.children[node]]
+            self.grades[node] = aggregate(node, grades)
+        return self.grades[node]
 
     def verdict(self):
         """The final verdict for all testcases (including samples)"""
-        return self.grade[self.root][0]
+        return self.grades[self.tree.root][0]
 
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
         if depth <= 0:
             return
         subgroups = list(
-            sorted(child for child in self.children[node] if child not in self.testcases)
+            sorted(child for child in self.tree.children[node] if child not in self.tree.leaves)
         )
         branches = ['├─ '] * (len(subgroups) - 1) + ['└─ ']
         for branch, child in zip(branches, subgroups):
-            if child not in self.testcases:
-                print(f"{prefix + branch + child.name:{paddinglength}} {self.grade[child][0]}")
+            if child not in self.tree.leaves:
+                grade = self.grades[child][0]
+                if self.expectations is not None:
+                    expectations = self.expectations.get(child)
+                    if expectations is not None:
+                        color = Fore.GREEN if short_verdict[grade] in expectations else Fore.RED
+                    else:
+                        color = Fore.YELLOW
+                else:
+                    color = Fore.YELLOW
+                print(
+                    f"{prefix + branch + child.name:{paddinglength}}",
+                    f"{color}{self.grades[child][0]}{Style.RESET_ALL}",
+                )
                 extension = '│  ' if branch == '├─ ' else '   '
                 self._rec_prettyprint_tree(
                     child, paddinglength, depth - 1, prefix=prefix + extension
@@ -86,10 +127,36 @@ class Grades:
             return
         paddinglength = max(
             3 * (len(node.parts)) + len(node.name)
-            for node in self.children
-            if node not in self.testcases and len(node.parts) <= maxdepth
+            for node in self.tree.children
+            if node not in self.tree.leaves and len(node.parts) <= maxdepth
         )
-        self._rec_prettyprint_tree(self.root, paddinglength, maxdepth)
+        self._rec_prettyprint_tree(self.tree.root, paddinglength, maxdepth)
+
+    def set_expectations(self, expected_grades):
+        """Populate self.expectations[p] for every node p in the testdatatree.
+        expected_grades is a string (for the root) or a dict indexed by strings, typically
+        expected_grades_yaml[submission.short_path]
+        """
+        self.expectations = {}
+        if expected_grades is None:
+            return
+        self._set_expectations_rec(expected_grades, self.tree.root)
+
+    def _set_expectations_rec(self, expected_grades, node: PurePath):
+        if isinstance(expected_grades, dict):
+            expected_verdicts = expected_grades.get('verdict') # could be None
+            if 'subgroups' in expected_grades:
+                for testgroup in expected_grades['subgroups']:  # 'sample', 'secret', 'edgecases', ...
+                    if not node / testgroup in self.tree.nodes:
+                        warn(
+                            f"Found expected grades for {node / testgroup}, but no such testgroup has testcases"
+                        )
+                    self._set_expectations_rec(expected_grades['subgroups'][testgroup], node / testgroup)
+        else: # str or list
+            expected_verdicts = expected_grades
+        # make sure it's a list (possibly of a singleton), unless it's None
+        if isinstance(expected_verdicts, str):
+            self.expectations[node] = [expected_verdicts]
 
 
 def aggregate(path, grades):
@@ -109,15 +176,6 @@ def call_default_grader(grades):
     Doesn't understand grader flags.
     Doesn't understand testdata.yaml.
     """
-
-    short_verdict = {
-        'ACCEPTED': 'AC',
-        'WRONG_ANSWER': 'WA',
-        'JUDGE_ERROR': 'JE',
-        'TIME_LIMIT_EXCEEDED': 'TLE',
-        'RUN_TIME_ERROR': 'RTE',
-    }
-    long_verdict = {v: k for k, v in short_verdict.items()}
 
     grader_input = '\n'.join(f"{short_verdict[v]} {s}" for v, s in grades)
 

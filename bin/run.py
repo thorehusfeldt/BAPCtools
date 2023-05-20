@@ -351,6 +351,11 @@ class Submission(program.Program):
 
         # The first element will match the directory the file is in, if possible.
         self.expected_verdicts = self._get_expected_verdicts()
+        self.expected_grades = self.problem._expected_grades_for_submission(self)
+
+    def _get_expected_grades(self):
+        return self.problem.expected_grades.get(self.short_path)
+
 
     def _get_expected_verdicts(self):
         verdicts = []
@@ -564,6 +569,7 @@ class Submission(program.Program):
         grades = Grades(all_results)
         if self.verdict != grades.verdict():
             warn("Default grader got {grades.verdict()}")
+        grades.set_expectations(self.expected_grades)
         grades.prettyprint_tree(maxdepth=config.args.gradetree_depth)
 
         return (self.verdict in self.expected_verdicts, printed_newline)
