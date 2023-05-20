@@ -104,10 +104,15 @@ class Grades:
         for branch, child in zip(branches, subgroups):
             if child not in self.tree.leaves:
                 grade = self.grades[child][0]
+                msg = None
                 if self.expectations is not None:
                     expectations = self.expectations.get(child)
                     if expectations is not None:
-                        color = Fore.GREEN if short_verdict[grade] in expectations else Fore.RED
+                        if short_verdict[grade] in expectations:
+                            color = Fore.GREEN
+                        else:
+                            color = Fore.RED
+                            msg = f"Expected {expectations}"
                     else:
                         color = Fore.YELLOW
                 else:
@@ -115,7 +120,9 @@ class Grades:
                 print(
                     f"{prefix + branch + child.name:{paddinglength}}",
                     f"{color}{self.grades[child][0]}{Style.RESET_ALL}",
+                    end=' '
                 )
+                print(msg or "")
                 extension = '│  ' if branch == '├─ ' else '   '
                 self._rec_prettyprint_tree(
                     child, paddinglength, depth - 1, prefix=prefix + extension
@@ -155,9 +162,7 @@ class Grades:
         else: # str or list
             expected_verdicts = expected_grades
         # make sure it's a list (possibly of a singleton), unless it's None
-        if isinstance(expected_verdicts, str):
-            self.expectations[node] = [expected_verdicts]
-
+        self.expectations[node] = [expected_verdicts] if isinstance(expected_verdicts, str) else expected_verdicts
 
 def aggregate(path, grades):
     """Given a list of grades, determine the default grader's grade per testgroup."""
