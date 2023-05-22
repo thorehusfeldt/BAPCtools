@@ -40,9 +40,8 @@ Moreover, the expected grades can be specified for subtrees of the tree of testc
 A simple example is
 ```
 wrong_answer/connected-graphs.py:
-  subgroups:
-    sample: AC
-    secret: WA
+  sample: AC
+  secret: WA
 ```
 which specifies that the `WA` submission `connected_graphs.py` must accept the testcases in `sample`.
 
@@ -52,21 +51,18 @@ partially-accepted/greedy.py:
   subgroups:
     sample: AC
     secret:
-      subgroups:
-        group1: AC
-        group2: AC
-        group3: WA
+      group1: AC
+      group2: AC
+      group3: WA
 ```
 
 But the syntax is agnostic towards how you organise your test groups. Here is another example: the `connected.py`-submission is supposed to work on all instances where the graph is connected.
 ```
 wrong_answer/connected.py:
   verdict: WA
-  subgroups:
     sample: AC
     secret:
-      subgroups:
-        connected: AC
+      connected: AC
 ```
 
 `bt run` is aware of the expectations and decorates its sub-testgroup output accordingly:

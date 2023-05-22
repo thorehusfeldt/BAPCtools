@@ -152,13 +152,14 @@ class Grades:
     def _set_expectations_rec(self, expected_grades, node: PurePath):
         if isinstance(expected_grades, dict):
             expected_verdicts = expected_grades.get('verdict') # could be None
-            if 'subgroups' in expected_grades:
-                for testgroup in expected_grades['subgroups']:  # 'sample', 'secret', 'edgecases', ...
-                    if not node / testgroup in self.tree.nodes:
-                        warn(
-                            f"Found expected grades for {node / testgroup}, but no such testgroup has testcases"
-                        )
-                    self._set_expectations_rec(expected_grades['subgroups'][testgroup], node / testgroup)
+            for testgroup in expected_grades:  # 'sample', 'secret', 'edgecases', ...
+                if testgroup in ['verdict', 'score']:
+                    continue
+                if not node / testgroup in self.tree.nodes:
+                    warn(
+                        f"Found expected grades for {node / testgroup}, but no such testgroup has testcases"
+                    )
+                self._set_expectations_rec(expected_grades[testgroup], node / testgroup)
         else: # str or list
             expected_verdicts = expected_grades
         # make sure it's a list (possibly of a singleton), unless it's None
