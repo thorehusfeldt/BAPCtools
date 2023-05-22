@@ -648,6 +648,10 @@ class Problem:
         if not yaml_path.is_file():
             return None
         yaml = read_yaml(yaml_path)
+        for path in yaml:
+            submission_path = self.path / 'submissions' / path
+            if not submission_path.is_file():
+                error(f"Expected grades specified for non-existing submission {path}")
         return { Path(k): v for k, v in yaml.items() }
 
     def _expected_grades_for_submission(self, submission):
