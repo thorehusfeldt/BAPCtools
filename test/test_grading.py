@@ -37,11 +37,6 @@ class TestDefaultGrader:
 
 
 class TestAggregate:
-    def test_accept_score(self):
-        testdata = {'accept_score': 42}
-        grades = [("ACCEPTED", 49), ("ACCEPTED", 51)]
-        assert grading.aggregate(None, grades, None)[1] == 100
-        assert grading.aggregate(None, grades, testdata)[1] == 42
 
     def test_grader_flags(self):
         grades = [("ACCEPTED", 2), ("ACCEPTED", 3)]
@@ -117,17 +112,19 @@ def test_Grades_accept_score_for_testgroup():
         GROUPS,
         testdata_settings={
             'secret/group1': {'accept_score': '12'},
-            'secret/group2': {'accept_score': '84'},
+            'secret/group2': {'accept_score': '21'},
             'secret': {},
             'sample': {},
             '.': {},
         },
     )
-    grades3["secret/group1/foo"] = ("ACCEPTED", 1)
-    grades3["secret/group1/bar"] = ("ACCEPTED", 1)
-    grades3["secret/group2/baz"] = ("ACCEPTED", 1)
-    grades3["sample/1"] = ("ACCEPTED", 1)
-    assert grades3["."] == ("ACCEPTED", 97)
+    grades3["secret/group1/foo"] = ("ACCEPTED")
+    grades3["secret/group1/bar"] = ("ACCEPTED")
+    grades3["secret/group2/baz"] = ("ACCEPTED")
+    grades3["sample/1"] = ("ACCEPTED")
+    assert grades3["secret/group1"] == ("ACCEPTED", 24)
+    assert grades3["secret"] == ("ACCEPTED", 45)
+    assert grades3["."] == ("ACCEPTED", 46)
 
 
 def test_Expectations_accept_inherited_downwards():

@@ -79,10 +79,28 @@ class TestDataTree:
 
         # make sure testdata_settings are not None, but possibly an empty dictionary:
         self.testdata_settings = {k: v or {} for k, v in testdata_settings.items()}
+        TestDataTree._set_defaults(self.testdata_settings)
+
+    @staticmethod
+    def _set_defaults(testdata_settings):
+        DEFAULTS = {
+            'on_reject': 'break',
+            # 'grading': not implemented, so not set
+            'grader_flags': '',
+            'accept_score': '1',
+            'reject_score': '0',
+            # 'range': not implemented, so not set
+        }
+        for node, settings in testdata_settings.items():
+            for key, default in DEFAULTS.items():
+                if key not in settings:
+                    settings[key] = default
 
     def get_settings(self, node):
         """Get the settings (as a dict) relevant for the given node, which can
-        be a testcase or an internal node"""
+        be a testcase or an internal node. This includes the default settings
+        (from the specification) explicitly.
+        """
         return self.testdata_settings[str(Path(node).parent) if node in self.leaves else node]
 
 
@@ -114,19 +132,22 @@ class Expectation:
 class Grades:
     """Expectations and grades, typically for a specific submission and set of testcases.
 
-    self.tree is the TestDataTree for the given testcases
-    self.expected_verdicts[node] is a set of expected grades;
-    self.expected_score[node] is a range of expected scores (makes sense only for scoring problems)
-
     Initially, no grades are known; when a grade is known (typically when a submission is run),
     set it with self.grade[testcase] = (verdict, score) or self.set_verdict[testcase] = verdict.
     When all testcases are graded (possibly even earlier), self.grade.verdict() has final verdict
+
+    self[node]  maps strings to tuples (verdict, score)
+    self.verdict(node) and self.score(node) access the components
     """
 
     def __init__(self, testcases, expectations=None, testdata_settings=None):
         """
+        expectations is typically from a yaml file, see _set_expectations
 
-        self.grades maps strings to tuples (verdict, score)
+        testdata_settings maps every internal node to either None or a dict of
+        settings that were explicitly given in `testdata.yaml` for that
+        node or an ancestor of it. (But it does not specify the default settings
+        from the specification.)
         """
         self.tree = TestDataTree(testcases, testdata_settings)
         self.expectations = {node: Expectation() for node in self.tree.nodes}
@@ -138,27 +159,30 @@ class Grades:
     def __setitem__(self, testcase: str, grade):
         """Set the grade for the given testcase to the given grade.
 
-        grade can be just a verdict, like "ACCEPTED":str or a grade like ("ACCEPTED", 1)
-        If score is not given, it is set to 1 for ACCEPTED, else 0
+        grade can be just a verdict, like "ACCEPTED" or a grade like ("ACCEPTED", 1)
+        If score is not given, infer it from the 'accept_score' setting
         """
         assert testcase in self.tree.leaves, f"Use setitem only for testcases, not {testcase}"
         assert self.grades[testcase] is None, f"Grade for {testcase} was already set"
         if isinstance(grade, str):
-            grade = (grade, int(grade == 'ACCEPTED'))
+            score = self.tree.get_settings(testcase)[
+                'accept_score' if grade == 'ACCEPTED' else 'reject_score'
+            ]
+            grade = (grade, score)
         self.grades[testcase] = grade
         self._infer_grade_upwards(testcase)
 
     def __getitem__(self, node: str):
         return self.grades[node]
 
-    def verdict(self, node:str=None):
-        """The final verdict for a node. If node is None, for the entire testcase. """
+    def verdict(self, node: str = None):
+        """The final verdict for a node. If node is None, for the entire testcase."""
         if node == None:
             node = self.tree.root
         return self.grades[node][0]
 
     def score(self):
-        """The final grade for a node. If node is None, for the entire testcase. """
+        """The final grade for a node. If node is None, for the entire testcase."""
         if node == None:
             node = self.tree.root
         return self[self.tree.root][1]
@@ -241,7 +265,6 @@ class Grades:
             self.grades[parent] = aggregate(parent, grades, settings=self.tree.get_settings(parent))
             self._infer_grade_upwards(parent)
 
-
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
         if depth <= 0:
             return
@@ -297,10 +320,6 @@ def aggregate(path, grades, settings):
     verdict, score = call_default_grader(
         grades, grader_flags=settings.get("grader_flags") if settings is not None else None
     )
-    if verdict == "ACCEPTED" and settings is not None and "accept_score" in settings:
-        score = settings["accept_score"]
-    if verdict != "ACCEPTED" and settings is not None and "reject_score" in settings:
-        score = settings["reject_score"]
     return verdict, score
 
 
