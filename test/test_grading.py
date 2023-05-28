@@ -163,3 +163,19 @@ def test_Grades_first_error():
     assert grades.verdict("secret/group1") == "TIME_LIMIT_EXCEEDED"
     assert grades.verdict("secret") == "RUN_TIME_ERROR"
 
+def test_recursive_inheritance_of_testdata_settings():
+    grades = grading.Grades(
+        GROUPS,
+        testdata_settings={
+            '.': {'accept_score': '2'},
+            'secret/group1': {},
+            'secret/group2': {},
+            'secret': {},
+            'sample': {}},
+    )
+    grades["secret/group1/foo"] = "ACCEPTED"
+    grades["secret/group1/bar"] = "ACCEPTED"
+    grades["secret/group2/baz"] = "ACCEPTED"
+    grades["sample/1"] = "ACCEPTED"
+    assert grades.score() == 8
+
