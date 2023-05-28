@@ -114,10 +114,11 @@ class Problem:
 
         self.interactive = self.settings.validation == 'custom interactive'
 
-    # Walk up from the in_path directory looking for the first testdata.yaml
-    # file, and return its contents, or None if no testdata.yaml is found.
     def get_testdata_yaml(p, in_path):
-        for parent in in_path.parents:
+        """ Walk up from the in_path looking for the first testdata.yaml
+            file, and return its contents, or None if no testdata.yaml is found.
+        """
+        for parent in [in_path] + list(in_path.parents):
             f = parent / 'testdata.yaml'
 
             if f.is_file():

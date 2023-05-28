@@ -1,7 +1,7 @@
 import os
 import sys
 
-from testgroups import Grades
+import grading
 import config
 import validate
 import program
@@ -471,6 +471,11 @@ class Submission(program.Program):
         verdict_run = None
         all_results = {}
 
+        testcases = set(tc.name for tc in self.problem.testcases())
+        ancestors = grading.ancestors(testcases)
+        settings = { node: self.problem.get_testdata_yaml(self.problem.path / 'data' / node) for node in ancestors }
+        grades = grading.Grades(testcases, self.expected_grades, settings)
+
         def process_run(run, p):
             nonlocal max_duration, verdict, verdict_run
 
@@ -492,7 +497,9 @@ class Submission(program.Program):
             if table_dict is not None:
                 table_dict[run.name] = result.verdict == 'ACCEPTED'
 
-            got_expected = result.verdict in ['ACCEPTED'] + self.expected_verdicts
+            #got_expected = result.verdict in ['ACCEPTED'] + self.expected_verdicts
+            grades[run.testcase.name] = result.verdict
+            got_expected = result.verdict in grades.expectations[run.testcase.name].verdicts
 
             # Print stderr whenever something is printed
             if result.out and result.err:
@@ -546,8 +553,11 @@ class Submission(program.Program):
 
         p.done()
 
-        self.verdict = verdict[1]
-        self.print_verdict = verdict[2]
+        self.verdict = grades.verdict()
+        self.print_verdict = f"{grades.verdict()}"
+        if hasattr(self.problem.settings, 'type') and self.problem.settings.type == 'scoring' and self.verdict == "ACCEPTED":
+            # TODO maybe set self.problem.seetings.type to default in problem.py
+            self.print_verdict += f" {grades.score():.0f}"
         self.duration = max_duration
 
         # Use a bold summary line if things were printed before.
@@ -566,10 +576,6 @@ class Submission(program.Program):
             message=f'{max_duration:6.3f}s {color}{self.print_verdict:<20}{Style.RESET_ALL} @ {verdict_run.testcase.name}'
         )
 
-        grades = Grades(all_results)
-        if self.verdict != grades.verdict():
-            warn("Default grader got {grades.verdict()}")
-        grades.set_expectations(self.expected_grades)
         grades.prettyprint_tree(maxdepth=config.args.gradetree_depth)
 
         return (self.verdict in self.expected_verdicts, printed_newline)
