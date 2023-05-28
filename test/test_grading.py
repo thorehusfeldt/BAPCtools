@@ -37,7 +37,6 @@ class TestDefaultGrader:
 
 
 class TestAggregate:
-
     def test_grader_flags(self):
         grades = [("ACCEPTED", 2), ("ACCEPTED", 3)]
         flags_and_outcomes = {"min": 2, "max": 3, "sum": 5, "ignore_sample": 3}
@@ -69,6 +68,15 @@ def test_TestDataTree():
     assert "secret/group1/bar" not in tree.children["secret/group2"]
     assert set(tree.children[tree.root]) == set(["secret", "sample"])
 
+def test_TestDataTree_iteration():
+    tree = grading.TestDataTree(GROUPS)
+    assert list(iter(tree)) == ['.', 'sample', 'secret', 'sample/1', 'secret/group1','secret/group2',
+    'secret/group1/bar',
+    'secret/group1/foo',
+    'secret/group2/baz'
+                               ]
+
+
 
 def test_Grades_basics():
     grades = grading.Grades(GROUPS)
@@ -91,12 +99,12 @@ def test_Grades_grader_flags():
         GROUPS,
         testdata_settings={
             'secret/group1': {'grader_flags': 'max accept_if_any_accepted'},
-            'secret/group2': {},
             'secret': {'grader_flags': 'sum'},
-            'sample': {},
             '.': {'grader_flags': 'sum'},
         },
     )
+    assert grades2.tree.settings['secret/group1']['grader_flags'] == 'max accept_if_any_accepted'
+    assert grades2.tree.settings['secret/group2']['grader_flags'] == 'sum'
     assert grades2["."] is None
     grades2["secret/group1/foo"] = ("ACCEPTED", 5)
     grades2["secret/group1/bar"] = ("WRONG_ANSWER", 6)
@@ -113,9 +121,6 @@ def test_Grades_accept_score_for_testgroup():
         testdata_settings={
             'secret/group1': {'accept_score': '12'},
             'secret/group2': {'accept_score': '21'},
-            'secret': {},
-            'sample': {},
-            '.': {},
         },
     )
     grades3["secret/group1/foo"] = ("ACCEPTED")
@@ -166,16 +171,10 @@ def test_Grades_first_error():
 def test_recursive_inheritance_of_testdata_settings():
     grades = grading.Grades(
         GROUPS,
-        testdata_settings={
-            '.': {'accept_score': '2'},
-            'secret/group1': {},
-            'secret/group2': {},
-            'secret': {},
-            'sample': {}},
+        testdata_settings={ '.': {'accept_score': '2'}}
     )
     grades["secret/group1/foo"] = "ACCEPTED"
     grades["secret/group1/bar"] = "ACCEPTED"
     grades["secret/group2/baz"] = "ACCEPTED"
     grades["sample/1"] = "ACCEPTED"
     assert grades.score() == 8
-

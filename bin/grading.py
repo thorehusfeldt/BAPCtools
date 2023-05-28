@@ -50,13 +50,15 @@ class TestDataTree:
     'sample' and 'secret'
     """
 
-    def __init__(self, testcasepaths, testdata_settings=None):
+    def __init__(self, testcasepaths, settings=None):
         """testcasepaths is an iterable of strings
 
-        testdata_settings is given as a dict for each(!) of the *internal* nodes,
+        settings is given as a dict for some(!) of the *internal* nodes,
         it was either set expliclty in testdata.yaml for the given
-        testgroup or from ancestors as per speficication. The settings for
-        and internal node may be the empty dict or None."""
+        testgroup or from ancestors as per speficication. From this, the
+        testdata for every internal node is inferred using the inheritance
+        logic implemented in verifyproblem.
+        """
 
         self.root = '.'
 
@@ -72,36 +74,47 @@ class TestDataTree:
         for node in self.children:
             self.children[node].sort()
 
-        if testdata_settings is None:
-            testdata_settings = {node: {} for node in self.children}
-        else:
-            assert set(testdata_settings.keys()) == set(self.children)
-
-        # make sure testdata_settings are not None, but possibly an empty dictionary:
-        self.testdata_settings = {k: v or {} for k, v in testdata_settings.items()}
-        TestDataTree._set_defaults(self.testdata_settings)
-
-    @staticmethod
-    def _set_defaults(testdata_settings):
-        DEFAULTS = {
+        # Determine the settings for every internal node
+        if settings is None:
+            settings = {}
+        defaults = {
             'on_reject': 'break',
             # 'grading': not implemented, so not set
             'grader_flags': '',
             'accept_score': '1',
             'reject_score': '0',
             # 'range': not implemented, so not set
+            # '{input, output}_validator_flags': not relevant for grading, so not set
         }
-        for node, settings in testdata_settings.items():
-            for key, default in DEFAULTS.items():
-                if key not in settings:
-                    settings[key] = default
+
+        self.settings = {'.': defaults | (settings.get('.') or {})}
+        for node in iter(self):
+            if node in self.leaves or node == '.':
+                continue
+            parent = TestDataTree.parent(node)
+            self.settings[node] = self.settings[parent] | (settings.get(node) or {} )
+
+    def __iter__(self):
+        """Iterate over the nodes in bfs-order and alphabetically:
+        ('.', 'sample', 'secret', 'sample/1'...)
+        """
+        queue = ['.']
+        for node in queue:
+            yield node
+            if node not in self.leaves:
+                for child in self.children[node]:
+                    queue.append(child)
+
+    @staticmethod
+    def parent(node):
+        """The parent of a node; '.' is the root."""
+        return str(Path(node).parent)
 
     def get_settings(self, node):
         """Get the settings (as a dict) relevant for the given node, which can
-        be a testcase or an internal node. This includes the default settings
-        (from the specification) explicitly.
+        be a testcase or an internal node.
         """
-        return self.testdata_settings[str(Path(node).parent) if node in self.leaves else node]
+        return self.settings[TestDataTree.parent(node) if node in self.leaves else node]
 
 
 class Expectation:
@@ -162,8 +175,10 @@ class Grades:
         grade can be just a verdict, like "ACCEPTED" or a grade like ("ACCEPTED", 1)
         If score is not given, infer it from the 'accept_score' setting
         """
-        assert testcase in self.tree.leaves, f"Use setitem only for testcases, not {testcase}"
-        assert self.grades[testcase] is None, f"Grade for {testcase} was already set"
+        if not testcase in self.tree.leaves:
+            raise KeyError(f"Use __setitem__ only for testcases, not {testcase}")
+        if self.grades[testcase] is not None:
+            raise ValueError(f"Grade for {testcase} was already set")
         if isinstance(grade, str):
             score = self.tree.get_settings(testcase)[
                 'accept_score' if grade == 'ACCEPTED' else 'reject_score'
@@ -177,13 +192,13 @@ class Grades:
 
     def verdict(self, node: str = None):
         """The final verdict for a node. If node is None, for the entire testcase."""
-        if node == None:
+        if node is None:
             node = self.tree.root
         return self.grades[node][0]
 
-    def score(self):
+    def score(self, node: str = None):
         """The final grade for a node. If node is None, for the entire testcase."""
-        if node == None:
+        if node is None:
             node = self.tree.root
         return self[self.tree.root][1]
 
@@ -230,10 +245,9 @@ class Grades:
         if node in tree.leaves:
             return
 
-        grader_flags = tree.get_settings(node).get('grader_flags')
+        grader_flags = tree.get_settings(node)['grader_flags']
         inherit_accepted = (self.expectations[node].verdicts == set(['ACCEPTED'])) and (
-            grader_flags is None
-            or ('accept_if_any_accepted' not in grader_flags or 'always_accept' not in grader_flags)
+            'accept_if_any_accepted' not in grader_flags or 'always_accept' not in grader_flags
         )
         for child in tree.children[node]:
             if inherit_accepted and not (
@@ -318,7 +332,7 @@ def aggregate(path, grades, settings):
         return ('ACCEPTED', 0)
 
     verdict, score = call_default_grader(
-        grades, grader_flags=settings.get("grader_flags") if settings is not None else None
+        grades, grader_flags=settings["grader_flags"] if settings is not None else None
     )
     return verdict, score
 
