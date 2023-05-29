@@ -29,6 +29,24 @@ def ancestors(paths):
     """Return the set of all ancestors of the given paths"""
     return set(str(ancestor) for p in paths for ancestor in Path(p).parents)
 
+class Grade:
+    def __init__(self, verdict, score=0):
+        self.verdict = verdict
+        self.score = score
+
+    def __str__(self):
+        res = self.verdict
+        if self.verdict == "AC":
+            res += f"({self.score:.0f})"
+        return res
+
+
+    def __repr__(self):
+        return repr(self.verdict) + repr(self.score)
+
+    def __eq__(self, other):
+        return self.score == other.score and self.verdict == other.verdict
+
 # pylint: disable=too-few-public-methods
 class TestDataTree:
     """The tree for all testcases and testgroups of a problem (in fact, for a subset of the
@@ -72,7 +90,7 @@ class TestDataTree:
             'grader_flags': '',
             'accept_score': '1',
             'reject_score': '0',
-            # 'range': not implemented, so not set
+            'range': '-inf inf'
             # '{input, output}_validator_flags': not relevant for grading, so not set
         }
 
@@ -110,28 +128,34 @@ class Expectation:
     """The expectation of a testnode."""
 
     def __init__(self, verdicts=None, score_range=None):
-        if verdicts is None:
-            # never expect JUDGE_ERROR
-            verdicts = ["AC", "WA", "TLE", "RTE"]
-        self.verdicts = set(verdicts)
-        if range is not None:
-            self.score_range = score_range
+        self.verdicts = set(verdicts or ["AC", "WA", "TLE", "RTE"])
+        self.score_range = score_range or "-inf inf"
 
     def __contains__(self, judgement):
-        """Judgement can be verdict:str, score:int, or a tuple (verdict, score).
-        If score is specified, self must have the score_range attribute.
+        """Judgement can be verdict:str or a Grade,
+        where score can be int, float, or even str
         """
-        if isinstance(judgement, tuple):
-            verdict, score = judgement
-            assert hasattr(self, 'score_range')
-            return verdict in self.verdicts and score in self.score_range
-        if isinstance(judgement, str):
-            return judgement in self.verdicts
-        assert hasattr(self, 'score_range')
-        return judgement in self.score_range
+        if isinstance(judgement, Grade):
+            verdict = judgement.verdict
+            lo, hi = map(float, self.score_range.split())
+            score_ok = lo <= float(judgement.score) <= hi
+        else:
+            verdict = judgement
+            score_ok = True
+
+        return verdict in self.verdicts and score_ok
 
     def __repr__(self):
-        return str(self.verdicts)
+        return str(f"{self.verdicts} {self.score_range}")
+
+    def __str__(self):
+        if len(self.verdicts) == 1:
+            res = next(iter(self.verdicts))
+            if res == 'AC':
+                res.append('(' + '..'.join(res.score.split()) + ')')
+        else:
+            res = str(self.verdicts)
+        return res
 
 
 class Grades:
@@ -161,11 +185,24 @@ class Grades:
             self._infer_expectations(self.tree.root)
         self.grades: int = {node: None for node in self.tree.nodes}
 
-    def __setitem__(self, testcase: str, grade):
+    def __setitem__(self, testcase, grade):
         """Set the grade for the given testcase to the given grade.
 
         grade can be just a verdict, like "AC" or a grade like ("AC", 1)
         If score is not given, infer it from the 'accept_score' setting
+        """
+        _ = list(self.set_grade(testcase, grade))
+
+    def set_grade(self, testcase, grade):
+        """ The default way of setting a testcase to a grade.
+
+        grade is either a Grade object of a string.
+
+        Returns an iterator of triples of the form
+
+            (testcase_, grade_, was_expected)
+
+        These contain the inferred grades from testcase and upwards.
         """
         if not testcase in self.tree.leaves:
             raise KeyError(f"Use __setitem__ only for testcases, not {testcase}")
@@ -175,49 +212,57 @@ class Grades:
             score = self.tree.get_settings(testcase)[
                 'accept_score' if grade == 'AC' else 'reject_score'
             ]
-            grade = (grade, score)
+            grade = Grade(grade, score)
         self.grades[testcase] = grade
-        self._infer_grade_upwards(testcase)
+        yield (testcase, grade)
+        yield from self._infer_grade_upwards(testcase)
 
-    def __getitem__(self, node: str):
+    def __getitem__(self, node: str) -> Grade:
         return self.grades[node]
 
-    def verdict(self, node: str = None):
+    def verdict(self, node: str = None) -> str:
         """The final verdict for a node. If node is None, for the root.
 
         Returns None if no grade has (yet) been determined.
         """
         if node is None:
             node = self.tree.root
-        return self.grades[node][0] if self.grades[node] is not None else None
+        return self.grades[node].verdict if self.grades[node] is not None else None
 
-    def score(self, node: str = None):
+    def score(self, node: str = None) -> float:
         """The final grade for a node. If node is None, for the root.
 
         Returns None if no grade has (yet) been determined.
         """
         if node is None:
             node = self.tree.root
-        return self[node][1] if self.grades[node] is not None else None
+        return self[node].score if self.grades[node] is not None else None
 
     def is_accepted(self, node=None):
         """Does the given node have an accepted verdict? If node is None, for the root. """
         if node is None:
             node = self.tree.root
-        return self.grades[node] is not None and self.grades[node][0] == 'AC'
+        return self.grades[node] is not None and self.grades[node].verdict == 'AC'
 
     def is_rejected(self, node=None):
         """Does the given node have a rejected verdict? If node is None, for the root. """
         if node is None:
             node = self.tree.root
-        return self.grades[node] is not None and self.grades[node][0] != 'AC'
+        return self.grades[node] is not None and self.grades[node].verdict != 'AC'
+
+    def is_expected(self, node=None):
+        if node is None:
+            node = self.tree.root
+        if self.grades[node] is None:
+            raise ValueError(f"No grade determined for {node}")
+        return self.grades[node] in self.expectations[node]
 
     def _set_expectations(self, expectations, node):
         """Recursively transfer the given expectations (typically from a yaml dict)
         to the testdatatree rooted at the given node.
 
         In the simplest case, expectations is just a string "AC".
-        But it can be a set of verdicts or a nested dict as well.
+        But it can be a list of verdicts or a nested dict as well.
         """
 
         if isinstance(expectations, dict):
@@ -239,7 +284,7 @@ class Grades:
             self.expectations[node].verdicts &= set(verdicts_for_node)
             if self.expectations[node].verdicts == set():
                 raise ValueError(f"Expectations cannot be the empty set, got {expectations}")
-        # TODO set ranges for scores
+        # TODO set ranges for scores from testdata and expectations
 
     def _infer_expectations(self, node):
         """Visit self.tree from given internal tesddatatree node and infer expecations downwards.
@@ -295,12 +340,15 @@ class Grades:
             grades = [self[sib] for sib in siblings if self[sib] is not None]
             aggregated_grade = aggregate(parent, grades, settings=self.tree.get_settings(parent))
 
-            if self[parent] is not None and self[parent] != aggregated_grade:
-                raise ValueError(
-                    f"Grade {aggregated_grade} for {parent} inferred from {node} was already set to {self[parent]}"
-                )
-            self.grades[parent] = aggregated_grade
-            self._infer_grade_upwards(parent)
+            if self[parent] is not None:
+                if self[parent] != aggregated_grade:
+                    raise ValueError(
+                        f"Grade {aggregated_grade} for {parent} inferred from {node} already set to {self[parent]}"
+                    )
+            else:
+                self.grades[parent] = aggregated_grade
+                yield (parent, aggregated_grade)
+                yield from self._infer_grade_upwards(parent)
 
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
         if depth <= 0:
@@ -311,7 +359,7 @@ class Grades:
         branches = ['├─ '] * (len(subgroups) - 1) + ['└─ ']
         for branch, child in zip(branches, subgroups):
             if child not in self.tree.leaves:
-                grade = self.grades[child][0]
+                grade = self.grades[child].grade
                 msg = None
                 if self.expectations is not None:
                     expectations = self.expectations.get(child)
@@ -356,21 +404,20 @@ def aggregate(path, grades, settings):
 
     if settings['on_reject'] == 'break':
         first_rejection = min(
-            (i for (i, grade) in enumerate(grades) if grade[0] != "AC"), default=None
+            (i for (i, grade) in enumerate(grades) if grade.verdict != "AC"), default=None
         )
         if first_rejection is not None:
             grades = grades[: first_rejection + 1]
-    verdict, score = call_default_grader(grades, grader_flags=settings["grader_flags"])
-    return verdict, score
+    return call_default_grader(grades, grader_flags=settings["grader_flags"])
 
 
 def call_default_grader(grades, grader_flags=None):
     """Run the default grader to aggregate the given grades;
 
-    grades is a list of tuples of verdicts and scores, like [("AC", 42), ("WA", 0)]
+    grades is a list of Grade objects
     """
 
-    grader_input = '\n'.join(f"{v} {s}" for v, s in grades)
+    grader_input = '\n'.join(f"{g.verdict} {g.score}" for g in grades)
     grader_flag_list = grader_flags.split() if grader_flags is not None else []
 
     grader = subprocess.Popen(
@@ -401,4 +448,4 @@ def call_default_grader(grades, grader_flags=None):
         return ('JE', None)
 
     verdict, score = grader_output.split()
-    return verdict, float(score)
+    return Grade(verdict, float(score))

@@ -498,8 +498,13 @@ class Submission(program.Program):
                 table_dict[run.name] = result.verdict == 'ACCEPTED'
 
             #got_expected = result.verdict in ['ACCEPTED'] + self.expected_verdicts
-            grades[run.testcase.name] = result.verdict
-            got_expected = result.verdict in grades.expectations[run.testcase.name].verdicts
+            recresults = list(grades.set_grade(run.testcase.name,  {
+                    "ACCEPTED": "AC",
+                    "WRONG_ANSWER": "WA",
+                    "RUN_TIME_ERROR": "RTE",
+                    "TIME_LIMIT_EXCEEDED": "TLE",
+                 }[result.verdict]))
+            got_expected = grades.is_expected(run.testcase.name)
 
             # Print stderr whenever something is printed
             if result.out and result.err:
@@ -537,10 +542,16 @@ class Submission(program.Program):
                     data += '\n'
                 data += f'{f.name}:' + localbar._format_data(t) + '\n'
 
+            for testgroup, grade in recresults[1:]:
+                if not grades.is_expected(testgroup):
+                    localbar.error(f'{testgroup} got {grade}, expected {grades.expectations[testgroup]}', data)
+
             localbar.done(got_expected, f'{result.duration:6.3f}s {result.print_verdict()}', data)
+
 
             # Lazy judging: stop on the first error when not in verbose mode.
             if (
+                not True and # TODO: override BAPC's default on_reject: break
                 not config.args.verbose and not config.args.table
             ) and result.verdict in config.MAX_PRIORITY_VERDICT:
                 bar.count = None
@@ -554,8 +565,14 @@ class Submission(program.Program):
         p.done()
 
         self.verdict = grades.verdict()
-        self.print_verdict = f"{grades.verdict()}"
-        if hasattr(self.problem.settings, 'type') and self.problem.settings.type == 'scoring' and self.verdict == "ACCEPTED":
+        self.print_verdict = {
+                "AC": "ACCEPTED",
+                "WA": "WRONG_ANSWER",
+                "TLE": "WRONG_ANSWER",
+                "JE": "JUDGE_ERROR",
+                "RTE": "RUN_TIME_ERROR",
+                }[self.verdict]
+        if hasattr(self.problem.settings, 'type') and self.problem.settings.type == 'scoring' and self.verdict == "AC":
             # TODO maybe set self.problem.seetings.type to default in problem.py
             self.print_verdict += f" {grades.score():.0f}"
         self.duration = max_duration
@@ -564,12 +581,12 @@ class Submission(program.Program):
         if bar.logged:
             color = (
                 Style.BRIGHT + Fore.GREEN
-                if self.verdict in self.expected_verdicts
+                if grades.is_expected()
                 else Style.BRIGHT + Fore.RED
             )
             boldcolor = Style.BRIGHT
         else:
-            color = Fore.GREEN if self.verdict in self.expected_verdicts else Fore.RED
+            color = Fore.GREEN if grades.is_expected() else Fore.RED
             boldcolor = ''
 
         printed_newline = bar.finalize(
