@@ -13,20 +13,14 @@ random.seed(0)
 class TestDefaultGrader:
     def test_defaults(self):
         # accept if all accept
-        verdict, score = grading.call_default_grader([("ACCEPTED", 42), ("ACCEPTED", 58)])
-        assert verdict == "ACCEPTED" and score == 100
+        verdict, score = grading.call_default_grader([("AC", 42), ("AC", 58)])
+        assert verdict == "AC" and score == 100
 
         # scoring mode should be `sum`
-        verdict, score = grading.call_default_grader([("ACCEPTED", 42), ("WRONG_ANSWER", 0)])
-        assert verdict == "WRONG_ANSWER" and score == 42
+        verdict, score = grading.call_default_grader([("AC", 42), ("WA", 0)])
+        assert verdict == "WA" and score == 42
 
-        verdicts_by_badness = [
-            "JUDGE_ERROR",
-            "RUN_TIME_ERROR",
-            "TIME_LIMIT_EXCEEDED",
-            "WRONG_ANSWER",
-            "ACCEPTED",
-        ]
+        verdicts_by_badness = ["JE", "RTE", "TLE", "WA", "AC"]
         # check all suffixes of verdicts_by_badness
         for i, worst in enumerate(verdicts_by_badness):
             verdicts = verdicts_by_badness[i:]
@@ -38,7 +32,7 @@ class TestDefaultGrader:
 
 class TestAggregate:
     def test_grader_flags(self):
-        grades = [("ACCEPTED", 2), ("ACCEPTED", 3)]
+        grades = [("AC", 2), ("AC", 3)]
         flags_and_outcomes = {"min": 2, "max": 3, "sum": 5, "ignore_sample": 3}
 
         for flag, outcome in flags_and_outcomes.items():
@@ -47,21 +41,21 @@ class TestAggregate:
                 "on_reject": "break"
                 })[1] == outcome
 
-        grades.append(("WRONG_ANSWER", 5))
+        grades.append(("WA", 5))
         assert grading.aggregate(None, grades, {
             "grader_flags": "accept_if_any_accepted",
             "on_reject": "continue",
             }) == (
-            "ACCEPTED",
+            "AC",
             10,
         )
 
-        grades.append(("WRONG_ANSWER", 5))
+        grades.append(("WA", 5))
         assert grading.aggregate(None, grades, {
             "grader_flags": "accept_if_any_accepted",
             "on_reject": "break",
             }) == (
-            "ACCEPTED",
+            "AC",
             10,
         )
 
@@ -96,16 +90,16 @@ def test_TestDataTree_iteration():
 def test_Grades_basics():
     grades = grading.Grades(GROUPS)
     assert grades.grades[grades.tree.root] is None
-    grades["secret/group1/bar"] = ("ACCEPTED", 1)
-    assert grades["secret/group1/bar"] == ("ACCEPTED", 1)
-    grades["secret/group1/foo"] = ("ACCEPTED", 1)
-    assert grades["secret/group1"] == ("ACCEPTED", 2)
+    grades["secret/group1/bar"] = ("AC", 1)
+    assert grades["secret/group1/bar"] == ("AC", 1)
+    grades["secret/group1/foo"] = ("AC", 1)
+    assert grades["secret/group1"] == ("AC", 2)
     assert grades["secret/group2"] is None
-    grades["secret/group2/baz"] = ("ACCEPTED", 1)
-    assert grades["secret"] == ("ACCEPTED", 3)
+    grades["secret/group2/baz"] = ("AC", 1)
+    assert grades["secret"] == ("AC", 3)
     assert grades["."] is None
-    grades["sample/1"] = ("ACCEPTED", 1)
-    assert grades["."] == ("ACCEPTED", 4)
+    grades["sample/1"] = ("AC", 1)
+    assert grades["."] == ("AC", 4)
 
 
 def test_Grades_grader_flags():
@@ -121,14 +115,14 @@ def test_Grades_grader_flags():
     assert grades2.tree.settings['secret/group1']['grader_flags'] == 'max accept_if_any_accepted'
     assert grades2.tree.settings['secret/group2']['grader_flags'] == 'sum'
     assert grades2["."] is None
-    grades2["secret/group1/bar"] = ("ACCEPTED", 5)
-    grades2["secret/group1/foo"] = ("WRONG_ANSWER", 6)
-    grades2["secret/group2/baz"] = ("ACCEPTED", 4)
+    grades2["secret/group1/bar"] = ("AC", 5)
+    grades2["secret/group1/foo"] = ("WA", 6)
+    grades2["secret/group2/baz"] = ("AC", 4)
     assert grades2["."] is None
-    grades2["sample/1"] = ("ACCEPTED", 8)
-    assert grades2["secret/group1"] == ("ACCEPTED", 6)
-    assert grades2["secret"] == ("ACCEPTED", 10)
-    assert grades2["."] == ("ACCEPTED", 18)
+    grades2["sample/1"] = ("AC", 8)
+    assert grades2["secret/group1"] == ("AC", 6)
+    assert grades2["secret"] == ("AC", 10)
+    assert grades2["."] == ("AC", 18)
 
 def test_Grades_accept_score_for_testgroup():
     grades3 = grading.Grades(
@@ -138,42 +132,66 @@ def test_Grades_accept_score_for_testgroup():
             'secret/group2': {'accept_score': '21'},
         },
     )
-    grades3["secret/group1/foo"] = ("ACCEPTED")
-    grades3["secret/group1/bar"] = ("ACCEPTED")
-    grades3["secret/group2/baz"] = ("ACCEPTED")
-    grades3["sample/1"] = ("ACCEPTED")
-    assert grades3["secret/group1"] == ("ACCEPTED", 24)
-    assert grades3["secret"] == ("ACCEPTED", 45)
-    assert grades3["."] == ("ACCEPTED", 46)
+    grades3["secret/group1/foo"] = ("AC")
+    grades3["secret/group1/bar"] = ("AC")
+    grades3["secret/group2/baz"] = ("AC")
+    grades3["sample/1"] = ("AC")
+    assert grades3["secret/group1"] == ("AC", 24)
+    assert grades3["secret"] == ("AC", 45)
+    assert grades3["."] == ("AC", 46)
 
+
+def test_set_excpecations_four_different_ways():
+    grades = grading.Grades(
+            ["secret/1", "secret/2", "secret/3", "secret/4"],
+            expectations= {
+                'secret': {
+                    '1': 'AC',
+                    '2': ['AC'],
+                    '3': { 'verdict': 'AC' },
+                    '4': { 'verdict': ['AC'] }
+                    }})
+    assert grades.expectations["secret/1"].verdicts == set(["AC"])
+    assert grades.expectations["secret/2"].verdicts == set(["AC"])
+    assert grades.expectations["secret/3"].verdicts == set(["AC"])
+    assert grades.expectations["secret/4"].verdicts == set(["AC"])
 
 def test_Expectations_accept_inherited_downwards():
-    # First see that ACCEPTED from the root gets passed down
+    # First see that AC from the root gets passed down
     grades4 = grading.Grades(
             GROUPS,
-            expectations = "ACCEPTED"
+            expectations = "AC"
             )
-    assert grades4.expectations["."].verdicts == set(["ACCEPTED"])
-    assert grades4.expectations["secret"].verdicts == set(["ACCEPTED"])
-    assert grades4.expectations["secret/group1/foo"].verdicts == set(["ACCEPTED"])
+    assert grades4.expectations["."].verdicts == set(["AC"])
+    assert grades4.expectations["secret"].verdicts == set(["AC"])
+    assert grades4.expectations["secret/group1/foo"].verdicts == set(["AC"])
 
 def test_Expectations_with_testgroups():
     # Richer example of expecations
     grades5 = grading.Grades(
             GROUPS,
             expectations = {
-                'verdict': ['WRONG_ANSWER', 'TIME_LIMIT_EXCEEDED'],
-                'sample': 'ACCEPTED',
+                'verdict': ['WA', 'TLE'],
+                'sample': 'AC',
                 'secret': {
-                    'group1': ['ACCEPTED']
+                    'group1': ['AC']
                     }
                 }
             )
-    assert grades5.expectations["."].verdicts == set(["WRONG_ANSWER", "TIME_LIMIT_EXCEEDED"])
-    assert grades5.expectations["sample"].verdicts == set(["ACCEPTED"])
-    assert grades5.expectations["secret/group1"].verdicts == set(["ACCEPTED"])
-    assert grades5.expectations["secret/group1/foo"].verdicts == set(["ACCEPTED"])
-    assert "TIME_LIMIT_EXCEEDED" in grades5.expectations["secret/group2/baz"].verdicts
+    assert grades5.expectations["."].verdicts == set(["WA", "TLE"])
+    assert grades5.expectations["sample"].verdicts == set(["AC"])
+    assert grades5.expectations["secret/group1"].verdicts == set(["AC"])
+    assert grades5.expectations["secret/group1/foo"].verdicts == set(["AC"])
+    assert "TLE" in grades5.expectations["secret/group2/baz"].verdicts
+
+def test_Expectations_one_testgroup():
+    # Very simple example of expecations
+    grades = grading.Grades(
+            GROUPS,
+            expectations = { 'secret': { 'group1': 'AC' } }
+            )
+    assert grades.expectations["secret/group1"].verdicts == set(["AC"])
+    assert "TLE" in grades.expectations["secret/group2"].verdicts
 
 def test_Grades_on_reject_break():
     # check that test group is graded as soon as it can (but not earlier)
@@ -182,12 +200,12 @@ def test_Grades_on_reject_break():
             ["secret/a", "secret/b", "secret/c", "secret/d"],
             testdata_settings = {'.': {'on_reject': 'break' }} # default, so should be redundant...
             )
-    grades["secret/b"] = 'WRONG_ANSWER'
+    grades["secret/b"] = 'WA'
     assert grades.verdict() is None # don't know anything, verdicts are '?? WA ?? ??'
-    grades["secret/c"] = 'ACCEPTED'
+    grades["secret/c"] = 'AC'
     assert grades.verdict() is None # still don't know, verdicts are '?? WA AC ??'
-    grades["secret/a"] = 'ACCEPTED'
-    assert grades.verdict() == 'WRONG_ANSWER' # verdicts are 'AC WA AC ??', gradeable
+    grades["secret/a"] = 'AC'
+    assert grades.verdict() == 'WA' # verdicts are 'AC WA AC ??', gradeable
 
 
 def test_Grades_first_error():
@@ -195,26 +213,26 @@ def test_Grades_first_error():
             ["secret/1", "secret/2", "secret/3"],
             testdata_settings={ '.': {'on_reject': 'continue', 'grader_flags': 'first_error'}}
             )
-    grades["secret/1"] = ("TIME_LIMIT_EXCEEDED", 1)
-    grades["secret/2"] = ("RUN_TIME_ERROR", 1)
-    grades["secret/3"] = ("WRONG_ANSWER", 1)
-    assert grades.verdict() == "TIME_LIMIT_EXCEEDED"
+    grades["secret/1"] = ("TLE", 1)
+    grades["secret/2"] = ("RTE", 1)
+    grades["secret/3"] = ("WA", 1)
+    assert grades.verdict() == "TLE"
 
 def test_Grades_worst_error():
     grades = grading.Grades(
             ["secret/1", "secret/2", "secret/3"],
             testdata_settings={ '.': {'on_reject': 'continue'}} # worst_error is default
             )
-    grades["secret/1"] = ("TIME_LIMIT_EXCEEDED", 1)
-    grades["secret/2"] = ("RUN_TIME_ERROR", 1)
-    grades["secret/3"] = ("WRONG_ANSWER", 1)
-    assert grades.verdict() == "RUN_TIME_ERROR"
+    grades["secret/1"] = ("TLE", 1)
+    grades["secret/2"] = ("RTE", 1)
+    grades["secret/3"] = ("WA", 1)
+    assert grades.verdict() == "RTE"
 
 def test_recursive_inheritance_of_testdata_settings():
     grades = grading.Grades(
         GROUPS,
         testdata_settings={ '.': {'accept_score': '2'}}
     )
-    grades["secret/group1/foo"] = "ACCEPTED"
-    grades["secret/group1/bar"] = "ACCEPTED"
-    grades["secret/group2/baz"] = "ACCEPTED"
+    grades["secret/group1/foo"] = "AC"
+    grades["secret/group1/bar"] = "AC"
+    grades["secret/group2/baz"] = "AC"

@@ -2,7 +2,7 @@
 
     Terminology used here:
 
-    - verdict:str 'ACCEPTED', 'WRONG_ANSWER', etc. (in its long form)
+    - verdict one of 'AC', 'WA', 'TLE', 'RTE', or 'JE'
     - score:float a number
     - grade: a tuple of (verdict, score)
 
@@ -25,20 +25,9 @@ from colorama import Fore, Style
 import config
 
 
-short_verdict = {
-    'ACCEPTED': 'AC',
-    'WRONG_ANSWER': 'WA',
-    'JUDGE_ERROR': 'JE',
-    'TIME_LIMIT_EXCEEDED': 'TLE',
-    'RUN_TIME_ERROR': 'RTE',
-}
-long_verdict = {v: k for k, v in short_verdict.items()}
-
-
 def ancestors(paths):
     """Return the set of all ancestors of the given paths"""
     return set(str(ancestor) for p in paths for ancestor in Path(p).parents)
-
 
 # pylint: disable=too-few-public-methods
 class TestDataTree:
@@ -123,12 +112,12 @@ class Expectation:
     def __init__(self, verdicts=None, score_range=None):
         if verdicts is None:
             # never expect JUDGE_ERROR
-            verdicts = ["ACCEPTED", "WRONG_ANSWER", "TIME_LIMIT_EXCEEDED", "RUN_TIME_ERROR"]
+            verdicts = ["AC", "WA", "TLE", "RTE"]
         self.verdicts = set(verdicts)
         if range is not None:
             self.score_range = score_range
 
-    def __in__(self, judgement):
+    def __contains__(self, judgement):
         """Judgement can be verdict:str, score:int, or a tuple (verdict, score).
         If score is specified, self must have the score_range attribute.
         """
@@ -140,6 +129,9 @@ class Expectation:
             return judgement in self.verdicts
         assert hasattr(self, 'score_range')
         return judgement in self.score_range
+
+    def __repr__(self):
+        return str(self.verdicts)
 
 
 class Grades:
@@ -172,7 +164,7 @@ class Grades:
     def __setitem__(self, testcase: str, grade):
         """Set the grade for the given testcase to the given grade.
 
-        grade can be just a verdict, like "ACCEPTED" or a grade like ("ACCEPTED", 1)
+        grade can be just a verdict, like "AC" or a grade like ("AC", 1)
         If score is not given, infer it from the 'accept_score' setting
         """
         if not testcase in self.tree.leaves:
@@ -181,7 +173,7 @@ class Grades:
             raise ValueError(f"Grade for {testcase} was already set")
         if isinstance(grade, str):
             score = self.tree.get_settings(testcase)[
-                'accept_score' if grade == 'ACCEPTED' else 'reject_score'
+                'accept_score' if grade == 'AC' else 'reject_score'
             ]
             grade = (grade, score)
         self.grades[testcase] = grade
@@ -191,7 +183,7 @@ class Grades:
         return self.grades[node]
 
     def verdict(self, node: str = None):
-        """The final verdict for a node. If node is None, for the entire testcase.
+        """The final verdict for a node. If node is None, for the root.
 
         Returns None if no grade has (yet) been determined.
         """
@@ -200,7 +192,7 @@ class Grades:
         return self.grades[node][0] if self.grades[node] is not None else None
 
     def score(self, node: str = None):
-        """The final grade for a node. If node is None, for the entire testcase.
+        """The final grade for a node. If node is None, for the root.
 
         Returns None if no grade has (yet) been determined.
         """
@@ -209,25 +201,27 @@ class Grades:
         return self[node][1] if self.grades[node] is not None else None
 
     def is_accepted(self, node=None):
+        """Does the given node have an accepted verdict? If node is None, for the root. """
         if node is None:
             node = self.tree.root
-        return self.grades[node] is not None and self.grades[node][0] == 'ACCEPTED'
+        return self.grades[node] is not None and self.grades[node][0] == 'AC'
 
     def is_rejected(self, node=None):
+        """Does the given node have a rejected verdict? If node is None, for the root. """
         if node is None:
             node = self.tree.root
-        return self.grades[node] is not None and self.grades[node][0] != 'ACCEPTED'
+        return self.grades[node] is not None and self.grades[node][0] != 'AC'
 
     def _set_expectations(self, expectations, node):
         """Recursively transfer the given expectations (typically from a yaml dict)
         to the testdatatree rooted at the given node.
 
-        In the simplest case, expectations is just a string "ACCEPTED".
+        In the simplest case, expectations is just a string "AC".
         But it can be a set of verdicts or a nested dict as well.
         """
 
         if isinstance(expectations, dict):
-            expected_verdicts = expectations.get('verdict')  # could be None or a list
+            verdicts_for_node = expectations.get('verdict')  # could be None, str, or ist
             for testgroup in expectations:  # 'sample', 'secret', 'edgecases', ...
                 if testgroup in ['verdict', 'score']:
                     continue
@@ -235,13 +229,16 @@ class Grades:
                 if not longgroupname in self.tree.nodes:
                     warn(f"Found expected grade for {longgroupname}, but no testcases")
                 self._set_expectations(expectations[testgroup], longgroupname)
-        elif isinstance(expectations, str):
-            expected_verdicts = [expectations]
         else:
-            expected_verdicts = expectations  # expecations is a list
+            verdicts_for_node = expectations
 
-        if expected_verdicts is not None:
-            self.expectations[node].verdicts &= set(expected_verdicts)
+        if verdicts_for_node is not None:
+            if isinstance(verdicts_for_node, str):
+                verdicts_for_node = [verdicts_for_node]
+
+            self.expectations[node].verdicts &= set(verdicts_for_node)
+            if self.expectations[node].verdicts == set():
+                raise ValueError(f"Expectations cannot be the empty set, got {expectations}")
         # TODO set ranges for scores
 
     def _infer_expectations(self, node):
@@ -249,9 +246,9 @@ class Grades:
 
         The following inference rules are implemented:
 
-        1.  If the expected verdicts of the given node is the singleton {'ACCEPTED'} and
+        1.  If the expected verdicts of the given node is the singleton {'AC'} and
             and the grader flag is neither `accept_if_any_accepted` nor `always_accept`
-            then all its children inherit the expectation {'ACCEPTED'}.
+            then all its children inherit the expectation {'AC'}.
             If node is the root, and `ignore_sample` is set, `sample` is excempt from this.
         2.  (Nothing else so far. Could do some cool stuff with error sets, but not
             worth it because on_reject: break, the default, invalidates many inference rules)
@@ -262,14 +259,14 @@ class Grades:
             return
 
         grader_flags = tree.get_settings(node)['grader_flags']
-        inherit_accepted = (self.expectations[node].verdicts == set(['ACCEPTED'])) and (
+        inherit_accepted = (self.expectations[node].verdicts == set(['AC'])) and (
             'accept_if_any_accepted' not in grader_flags or 'always_accept' not in grader_flags
         )
         for child in tree.children[node]:
             if inherit_accepted and not (
                 node == tree.root and 'ignore_sample' in tree.get_settings(node)
             ):
-                self.expectations[child].verdicts &= set(['ACCEPTED'])
+                self.expectations[child].verdicts &= set(['AC'])
                 if len(self.expectations[child].verdicts) == 0:
                     error(f"No verdict possible for {child}")
             self._infer_expectations(child)
@@ -319,7 +316,7 @@ class Grades:
                 if self.expectations is not None:
                     expectations = self.expectations.get(child)
                     if expectations is not None:
-                        if short_verdict[grade] in expectations:
+                        if grade in expectations:
                             color = Fore.GREEN
                         else:
                             color = Fore.RED
@@ -329,7 +326,7 @@ class Grades:
                 else:
                     color = Fore.YELLOW
                 print(
-                    f"{prefix + branch + child.name:{paddinglength}}",
+                    f"{prefix + branch + child:{paddinglength}}",
                     f"{color}{self.grades[child]}{Style.RESET_ALL}",
                     end=' ',
                 )
@@ -344,9 +341,9 @@ class Grades:
         if maxdepth == 0:
             return
         paddinglength = max(
-            3 * (len(node.parts)) + len(node.name)
+            3 * (len(Path(node).parts)) + len(node)
             for node in self.tree.children
-            if node not in self.tree.leaves and len(node.parts) <= maxdepth
+            if node not in self.tree.leaves and len(Path(node).parts) <= maxdepth
         )
         self._rec_prettyprint_tree(self.tree.root, paddinglength, maxdepth)
 
@@ -355,11 +352,11 @@ def aggregate(path, grades, settings):
     """Given a list of grades, determine the default grader's grade per testgroup."""
     if not grades:
         log(f'No grades on {path}, so no graders ran')
-        return ('ACCEPTED', 0)
+        return ('AC', 0)
 
     if settings['on_reject'] == 'break':
         first_rejection = min(
-            (i for (i, grade) in enumerate(grades) if grade[0] != "ACCEPTED"), default=None
+            (i for (i, grade) in enumerate(grades) if grade[0] != "AC"), default=None
         )
         if first_rejection is not None:
             grades = grades[: first_rejection + 1]
@@ -369,14 +366,11 @@ def aggregate(path, grades, settings):
 
 def call_default_grader(grades, grader_flags=None):
     """Run the default grader to aggregate the given grades;
-    this involves translating from 'ACCEPTED' to 'AC' and back.
 
-    grades is a list of tuples of verdicts and scores, like [("ACCEPTED", 42), ("WRONG_ANSWER", 0)]
-
-    SPEC-BREAKING CHANGE: assumes scores are integers, silently rounds down to nearest integer
+    grades is a list of tuples of verdicts and scores, like [("AC", 42), ("WA", 0)]
     """
 
-    grader_input = '\n'.join(f"{short_verdict[v]} {s}" for v, s in grades)
+    grader_input = '\n'.join(f"{v} {s}" for v, s in grades)
     grader_flag_list = grader_flags.split() if grader_flags is not None else []
 
     grader = subprocess.Popen(
@@ -391,20 +385,20 @@ def call_default_grader(grades, grader_flags=None):
     except subprocess.TimeoutExpired:
         error('Judge error: Grader timed out')
         debug('Grader input: %s\n' % grader_input)
-        return ('JUDGE_ERROR', None)
+        return ('JE', None)
 
     ret = grader.returncode
     if ret != 0:
         error('Judge error: exit code %d for grader %s, expected 0' % (ret, grader))
         debug('Grader input: %s\n' % grader_input)
-        return ('JUDGE_ERROR', None)
+        return ('JE', None)
 
     grader_output_re = r'^((AC)|(WA)|(TLE)|(RTE)|(JE))\s+-?[0-9.]+\s*$'
     if not re.match(grader_output_re, grader_output):
         error('Judge error: invalid format of grader output')
         debug('Output must match: "%s"' % grader_output_re)
         debug('Output was: "%s"' % grader_output)
-        return ('JUDGE_ERROR', None)
+        return ('JE', None)
 
     verdict, score = grader_output.split()
-    return long_verdict[verdict], float(score)
+    return verdict, float(score)
