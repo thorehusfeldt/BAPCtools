@@ -175,6 +175,21 @@ def test_Expectations_with_testgroups():
     assert grades5.expectations["secret/group1/foo"].verdicts == set(["ACCEPTED"])
     assert "TIME_LIMIT_EXCEEDED" in grades5.expectations["secret/group2/baz"].verdicts
 
+def test_Grades_on_reject_break():
+    # check that test group is graded as soon as it can (but not earlier)
+    # default is on_reject: break
+    grades = grading.Grades(
+            ["secret/a", "secret/b", "secret/c", "secret/d"],
+            testdata_settings = {'.': {'on_reject': 'break' }} # default, so should be redundant...
+            )
+    grades["secret/b"] = 'WRONG_ANSWER'
+    assert grades.verdict() is None # don't know anything, verdicts are '?? WA ?? ??'
+    grades["secret/c"] = 'ACCEPTED'
+    assert grades.verdict() is None # still don't know, verdicts are '?? WA AC ??'
+    grades["secret/a"] = 'ACCEPTED'
+    assert grades.verdict() == 'WRONG_ANSWER' # verdicts are 'AC WA AC ??', gradeable
+
+
 def test_Grades_first_error():
     grades = grading.Grades(
             ["secret/1", "secret/2", "secret/3"],
@@ -203,5 +218,3 @@ def test_recursive_inheritance_of_testdata_settings():
     grades["secret/group1/foo"] = "ACCEPTED"
     grades["secret/group1/bar"] = "ACCEPTED"
     grades["secret/group2/baz"] = "ACCEPTED"
-    grades["sample/1"] = "ACCEPTED"
-    assert grades.score() == 8

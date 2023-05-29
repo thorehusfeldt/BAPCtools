@@ -191,16 +191,32 @@ class Grades:
         return self.grades[node]
 
     def verdict(self, node: str = None):
-        """The final verdict for a node. If node is None, for the entire testcase."""
+        """The final verdict for a node. If node is None, for the entire testcase.
+
+        Returns None if no grade has (yet) been determined.
+        """
         if node is None:
             node = self.tree.root
-        return self.grades[node][0]
+        return self.grades[node][0] if self.grades[node] is not None else None
 
     def score(self, node: str = None):
-        """The final grade for a node. If node is None, for the entire testcase."""
+        """The final grade for a node. If node is None, for the entire testcase.
+
+        Returns None if no grade has (yet) been determined.
+        """
         if node is None:
             node = self.tree.root
-        return self[self.tree.root][1]
+        return self[node][1] if self.grades[node] is not None else None
+
+    def is_accepted(self, node=None):
+        if node is None:
+            node = self.tree.root
+        return self.grades[node] is not None and self.grades[node][0] == 'ACCEPTED'
+
+    def is_rejected(self, node=None):
+        if node is None:
+            node = self.tree.root
+        return self.grades[node] is not None and self.grades[node][0] != 'ACCEPTED'
 
     def _set_expectations(self, expectations, node):
         """Recursively transfer the given expectations (typically from a yaml dict)
@@ -262,21 +278,31 @@ class Grades:
         """For a node that just changed its grades[node] (from None to a grade), check if this
         has consequences for its ancestors, and if so, infer grades upwards.
 
-        We only do so if *all* chilren of a node have grades.
-        Improve me by
-        - considering the `on_reject` setting
-        - implementing topsort properly
+        Note that `accept_if_any_accepted` cannot be graded just on the basis of a single
+        accepted verdict (because the score may be different)
         """
         if node == self.tree.root:
             return
-        parent = str(Path(node).parent)
-        if self[parent] is not None:
-            error(f"Grade for {parent} inferred from {node} was already inferred")
-            # above logic could be different if we shortcut grading bc first_error etc
+        parent = TestDataTree.parent(node)
         siblings = self.tree.children[parent]
-        if all(self[node] is not None for node in siblings):
-            grades = [self[node] for node in siblings]
-            self.grades[parent] = aggregate(parent, grades, settings=self.tree.get_settings(parent))
+        settings = self.tree.settings[parent]
+        first_error_idx = min(
+            (i for i, sib in enumerate(siblings) if self.is_rejected(sib)),
+            default=len(siblings),
+        )
+        if (
+            all(self[sib] is not None for sib in siblings)
+            or settings['on_reject'] == 'break'
+            and all(self.is_accepted(sib) for sib in siblings[:first_error_idx])
+        ):
+            grades = [self[sib] for sib in siblings if self[sib] is not None]
+            aggregated_grade = aggregate(parent, grades, settings=self.tree.get_settings(parent))
+
+            if self[parent] is not None and self[parent] != aggregated_grade:
+                raise ValueError(
+                    f"Grade {aggregated_grade} for {parent} inferred from {node} was already set to {self[parent]}"
+                )
+            self.grades[parent] = aggregated_grade
             self._infer_grade_upwards(parent)
 
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
@@ -336,7 +362,7 @@ def aggregate(path, grades, settings):
             (i for (i, grade) in enumerate(grades) if grade[0] != "ACCEPTED"), default=None
         )
         if first_rejection is not None:
-            grades = grades[:first_rejection + 1]
+            grades = grades[: first_rejection + 1]
     verdict, score = call_default_grader(grades, grader_flags=settings["grader_flags"])
     return verdict, score
 
