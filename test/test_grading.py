@@ -42,10 +42,25 @@ class TestAggregate:
         flags_and_outcomes = {"min": 2, "max": 3, "sum": 5, "ignore_sample": 3}
 
         for flag, outcome in flags_and_outcomes.items():
-            assert grading.aggregate(None, grades, {"grader_flags": flag})[1] == outcome
+            assert grading.aggregate(None, grades, {
+                "grader_flags": flag,
+                "on_reject": "break"
+                })[1] == outcome
 
         grades.append(("WRONG_ANSWER", 5))
-        assert grading.aggregate(None, grades, {"grader_flags": "accept_if_any_accepted"}) == (
+        assert grading.aggregate(None, grades, {
+            "grader_flags": "accept_if_any_accepted",
+            "on_reject": "continue",
+            }) == (
+            "ACCEPTED",
+            10,
+        )
+
+        grades.append(("WRONG_ANSWER", 5))
+        assert grading.aggregate(None, grades, {
+            "grader_flags": "accept_if_any_accepted",
+            "on_reject": "break",
+            }) == (
             "ACCEPTED",
             10,
         )
@@ -106,8 +121,8 @@ def test_Grades_grader_flags():
     assert grades2.tree.settings['secret/group1']['grader_flags'] == 'max accept_if_any_accepted'
     assert grades2.tree.settings['secret/group2']['grader_flags'] == 'sum'
     assert grades2["."] is None
-    grades2["secret/group1/foo"] = ("ACCEPTED", 5)
-    grades2["secret/group1/bar"] = ("WRONG_ANSWER", 6)
+    grades2["secret/group1/bar"] = ("ACCEPTED", 5)
+    grades2["secret/group1/foo"] = ("WRONG_ANSWER", 6)
     grades2["secret/group2/baz"] = ("ACCEPTED", 4)
     assert grades2["."] is None
     grades2["sample/1"] = ("ACCEPTED", 8)
@@ -161,12 +176,24 @@ def test_Expectations_with_testgroups():
     assert "TIME_LIMIT_EXCEEDED" in grades5.expectations["secret/group2/baz"].verdicts
 
 def test_Grades_first_error():
-    grades = grading.Grades(GROUPS)
-    grades["secret/group1/foo"] = ("TIME_LIMIT_EXCEEDED", 1)
-    grades["secret/group1/bar"] = ("WRONG_ANSWER", 1)
-    grades["secret/group2/baz"] = ("RUN_TIME_ERROR", 1)
-    assert grades.verdict("secret/group1") == "TIME_LIMIT_EXCEEDED"
-    assert grades.verdict("secret") == "RUN_TIME_ERROR"
+    grades = grading.Grades(
+            ["secret/1", "secret/2", "secret/3"],
+            testdata_settings={ '.': {'on_reject': 'continue', 'grader_flags': 'first_error'}}
+            )
+    grades["secret/1"] = ("TIME_LIMIT_EXCEEDED", 1)
+    grades["secret/2"] = ("RUN_TIME_ERROR", 1)
+    grades["secret/3"] = ("WRONG_ANSWER", 1)
+    assert grades.verdict() == "TIME_LIMIT_EXCEEDED"
+
+def test_Grades_worst_error():
+    grades = grading.Grades(
+            ["secret/1", "secret/2", "secret/3"],
+            testdata_settings={ '.': {'on_reject': 'continue'}} # worst_error is default
+            )
+    grades["secret/1"] = ("TIME_LIMIT_EXCEEDED", 1)
+    grades["secret/2"] = ("RUN_TIME_ERROR", 1)
+    grades["secret/3"] = ("WRONG_ANSWER", 1)
+    assert grades.verdict() == "RUN_TIME_ERROR"
 
 def test_recursive_inheritance_of_testdata_settings():
     grades = grading.Grades(

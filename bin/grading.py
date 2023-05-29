@@ -92,7 +92,7 @@ class TestDataTree:
             if node in self.leaves or node == '.':
                 continue
             parent = TestDataTree.parent(node)
-            self.settings[node] = self.settings[parent] | (settings.get(node) or {} )
+            self.settings[node] = self.settings[parent] | (settings.get(node) or {})
 
     def __iter__(self):
         """Iterate over the nodes in bfs-order and alphabetically:
@@ -331,9 +331,13 @@ def aggregate(path, grades, settings):
         log(f'No grades on {path}, so no graders ran')
         return ('ACCEPTED', 0)
 
-    verdict, score = call_default_grader(
-        grades, grader_flags=settings["grader_flags"] if settings is not None else None
-    )
+    if settings['on_reject'] == 'break':
+        first_rejection = min(
+            (i for (i, grade) in enumerate(grades) if grade[0] != "ACCEPTED"), default=None
+        )
+        if first_rejection is not None:
+            grades = grades[:first_rejection + 1]
+    verdict, score = call_default_grader(grades, grader_flags=settings["grader_flags"])
     return verdict, score
 
 
