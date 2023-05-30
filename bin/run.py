@@ -471,10 +471,9 @@ class Submission(program.Program):
         all_results = {}
 
         testcases = set(tc.name for tc in self.problem.testcases())
-        ancestors = grading.ancestors(testcases)
         settings = {
             node: self.problem.get_testdata_yaml(self.problem.path / 'data' / node)
-            for node in ancestors
+            for node in grading.ancestors(testcases)
         }
         grades = grading.Grades(testcases, self.expected_grades, settings)
 
@@ -500,8 +499,7 @@ class Submission(program.Program):
                 table_dict[run.name] = result.verdict == 'ACCEPTED'
 
             # got_expected = result.verdict in ['ACCEPTED'] + self.expected_verdicts
-            recresults = list(
-                grades.set_grade(
+            grading_results = grades.set_grade(
                     run.testcase.name,
                     {
                         "ACCEPTED": "AC",
@@ -510,8 +508,7 @@ class Submission(program.Program):
                         "TIME_LIMIT_EXCEEDED": "TLE",
                     }[result.verdict],
                 )
-            )
-            got_expected = grades.is_expected(run.testcase.name)
+            got_expected = all(grades.is_expected(node) for (node, _) in grading_results)
 
             # Print stderr whenever something is printed
             if result.out and result.err:
@@ -549,13 +546,23 @@ class Submission(program.Program):
                     data += '\n'
                 data += f'{f.name}:' + localbar._format_data(t) + '\n'
 
-            for testgroup, grade in recresults[1:]:
-                if not grades.is_expected(testgroup):
-                    localbar.error(
-                        f'{testgroup} got {grade}, expected {grades.expectations[testgroup]}', data
-                    )
-
             localbar.done(got_expected, f'{result.duration:6.3f}s {result.print_verdict()}', data)
+
+            if not got_expected:
+                for node, grade in grading_results[1:]:
+                    if node == '.':
+                        continue
+                    localbar = bar.start(node)
+                    if not grades.is_expected(node):
+                        localbar.error(
+                            f'        {grade}', f'Expected {grades.expectations[node]}'
+                        )
+                    else:
+                        localbar.log(
+                            f'        {grade}'
+                        )
+                    localbar.done()
+
 
             # Lazy judging: stop as soon as top-level verdict is determined
             if grades.verdict() and not config.args.verbose and not config.args.table:

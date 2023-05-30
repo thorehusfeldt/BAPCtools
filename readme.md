@@ -68,3 +68,8 @@ wrong_answer/connected.py:
 `bt run` is aware of the expectations and decorates its sub-testgroup output accordingly:
 
 ![run with expected grades](doc/images/expected_grades.png)
+
+When `bt run` evaluates a testcase that leads to an unexpected grade (either for the testcase itself or for an ancestor of the testcase, such as `sample` or `secret/edge_cases/disconnected_graphs` or `secret/group1`), it reports the inferred verdicts and highlights unexpected grades.
+
+![inferred unexpected](doc/images/unexpected_inference.png)
+
