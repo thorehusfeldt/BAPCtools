@@ -81,16 +81,16 @@ def test_DataTree_iteration():
 
 def test_Grades_basics():
     grades = Grades(GROUPS)
-    assert grades.grades[grades.tree.root] is None
-    grades["secret/group1/bar"] = Grade("AC", 1)
+    assert grades[grades.tree.root] is None
+    grades.set_grade("secret/group1/bar", "AC", 1)
     assert grades["secret/group1/bar"] == Grade("AC", 1)
-    grades["secret/group1/foo"] = Grade("AC", 1)
+    grades.set_grade("secret/group1/foo", "AC", 1)
     assert grades["secret/group1"] == Grade("AC", 2)
     assert grades["secret/group2"] is None
-    grades["secret/group2/baz"] = Grade("AC", 1)
+    grades.set_grade("secret/group2/baz", "AC", 1)
     assert grades["secret"] == Grade("AC", 3)
     assert grades["."] is None
-    grades["sample/1"] = Grade("AC", 1)
+    grades.set_grade("sample/1", "AC", 1)
     assert grades["."] == Grade("AC", 4)
 
 
@@ -107,11 +107,11 @@ def test_Grades_grader_flags():
     assert grades2.tree.settings['secret/group1']['grader_flags'] == 'max accept_if_any_accepted'
     assert grades2.tree.settings['secret/group2']['grader_flags'] == 'sum'
     assert grades2["."] is None
-    grades2["secret/group1/bar"] = Grade("AC", 5)
-    grades2["secret/group1/foo"] = Grade("WA", 6)
-    grades2["secret/group2/baz"] = Grade("AC", 4)
+    grades2.set_grade("secret/group1/bar", "AC", 5)
+    grades2.set_grade("secret/group1/foo", "WA", 6)
+    grades2.set_grade("secret/group2/baz", "AC", 4)
     assert grades2["."] is None
-    grades2["sample/1"] = Grade("AC", 8)
+    grades2.set_grade("sample/1", "AC", 8)
     assert grades2["secret/group1"] == Grade("AC", 6)
     assert grades2["secret"] == Grade("AC", 10)
     assert grades2["."] == Grade("AC", 18)
@@ -124,10 +124,10 @@ def test_Grades_accept_score_for_testgroup():
             'secret/group2': {'accept_score': '21'},
         },
     )
-    grades3["secret/group1/foo"] = "AC"
-    grades3["secret/group1/bar"] = "AC"
-    grades3["secret/group2/baz"] = "AC"
-    grades3["sample/1"] = "AC"
+    grades3.set_grade("secret/group1/foo", "AC")
+    grades3.set_grade("secret/group1/bar", "AC")
+    grades3.set_grade("secret/group2/baz", "AC")
+    grades3.set_grade("sample/1", "AC")
     assert grades3["secret/group1"] == Grade("AC", 24)
     assert grades3["secret"] == Grade("AC", 45)
     assert grades3["."] == Grade("AC", 46)
@@ -192,11 +192,11 @@ def test_Grades_on_reject_break():
             ["secret/a", "secret/b", "secret/c", "secret/d"],
             testdata_settings = {'.': {'on_reject': 'break' }} # default, so should be redundant...
             )
-    grades["secret/b"] = 'WA'
+    grades.set_grade("secret/b",  'WA')
     assert grades.verdict() is None # don't know anything, verdicts are '?? WA ?? ??'
-    grades["secret/c"] = 'AC'
+    grades.set_grade("secret/c", 'AC')
     assert grades.verdict() is None # still don't know, verdicts are '?? WA AC ??'
-    grades["secret/a"] = 'AC'
+    grades.set_grade("secret/a", 'AC')
     assert grades.verdict() == 'WA' # verdicts are 'AC WA AC ??', gradeable
 
 
@@ -205,9 +205,9 @@ def test_Grades_first_error():
             ["secret/1", "secret/2", "secret/3"],
             testdata_settings={ '.': {'on_reject': 'continue', 'grader_flags': 'first_error'}}
             )
-    grades["secret/1"] = Grade("TLE")
-    grades["secret/2"] = Grade("RTE")
-    grades["secret/3"] = Grade("WA")
+    grades.set_grade("secret/1", "TLE")
+    grades.set_grade("secret/2", "RTE")
+    grades.set_grade("secret/3", "WA")
     assert grades.verdict() == "TLE"
 
 def test_Grades_worst_error():
@@ -215,9 +215,9 @@ def test_Grades_worst_error():
             ["secret/1", "secret/2", "secret/3"],
             testdata_settings={ '.': {'on_reject': 'continue'}} # worst_error is default
             )
-    grades["secret/1"] = Grade("TLE")
-    grades["secret/2"] = Grade("RTE")
-    grades["secret/3"] = Grade("WA")
+    grades.set_grade("secret/1", "TLE")
+    grades.set_grade("secret/2", "RTE")
+    grades.set_grade("secret/3", "WA")
     assert grades.verdict() == "RTE"
 
 def test_recursive_inheritance_of_testdata_settings():
@@ -225,6 +225,6 @@ def test_recursive_inheritance_of_testdata_settings():
         GROUPS,
         testdata_settings={ '.': {'accept_score': '2'}}
     )
-    grades["secret/group1/foo"] = "AC"
-    grades["secret/group1/bar"] = "AC"
-    grades["secret/group2/baz"] = "AC"
+    grades.set_grade("secret/group1/foo", "AC")
+    grades.set_grade("secret/group1/bar", "AC")
+    grades.set_grade("secret/group2/baz", "AC")

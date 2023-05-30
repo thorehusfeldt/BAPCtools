@@ -29,23 +29,29 @@ def ancestors(paths):
     """Return the set of all ancestors of the given paths"""
     return set(str(ancestor) for p in paths for ancestor in Path(p).parents)
 
+
 class Grade:
     def __init__(self, verdict, score=0):
         self.verdict = verdict
         self.score = score
 
     def __str__(self):
-        res = self.verdict
+        res = {
+            "AC": "ACCEPTED",
+            "WA": "WRONG_ANSWER",
+            "TLE": "TIME_LIMIT_EXCEEDED",
+            "RTE": "RUN_TIME_ERROR",
+        }[self.verdict]
         if self.verdict == "AC":
-            res += f"({self.score:.0f})"
+            res += f" {self.score:.0f}"
         return res
-
 
     def __repr__(self):
         return repr(self.verdict) + repr(self.score)
 
     def __eq__(self, other):
         return self.score == other.score and self.verdict == other.verdict
+
 
 # pylint: disable=too-few-public-methods
 class TestDataTree:
@@ -185,21 +191,10 @@ class Grades:
             self._infer_expectations(self.tree.root)
         self.grades: int = {node: None for node in self.tree.nodes}
 
-    def __setitem__(self, testcase, grade):
-        """Set the grade for the given testcase to the given grade.
-
-        grade can be just a verdict, like "AC" or a grade like ("AC", 1)
-        If score is not given, infer it from the 'accept_score' setting
+    def set_grade(self, testcase, verdict, score=None):
         """
-        if not testcase in self.tree.leaves:
-            raise KeyError(f"Use __setitem__ only for testcases, not {testcase}")
-        _ = list(self.set_grade(testcase, grade))
-
-    def set_grade(self, testcase, grade):
-        """ The default way of setting a testcase to a grade.
-
-        grade is either a Grade object of a string (a verdict)
-
+        Set the grade of this testcase. If score is given, use that; otherwise use defaults
+        `accept_score` or `reject_score`.
         Returns a sequence of tuples of the form
 
             (testnode_, grade_)
@@ -211,12 +206,11 @@ class Grades:
         if self.grades[testcase] is not None:
             raise ValueError(f"Grade for {testcase} was already set (to {self.grades[testcase]})")
         settings = self.tree.get_settings(testcase)
-        if isinstance(grade, str):
+        if score is None:
             score = self.tree.get_settings(testcase)[
-                'accept_score' if grade == 'AC' else 'reject_score'
+                'accept_score' if verdict == 'AC' else 'reject_score'
             ]
-            grade = Grade(grade, score)
-        self.grades[testcase] = grade
+        self.grades[testcase] = grade = Grade(verdict, score)
         return ((testcase, grade),) + tuple(self.generate_ancestor_grades(testcase))
 
     def __getitem__(self, node: str) -> Grade:
@@ -241,13 +235,13 @@ class Grades:
         return self[node].score if self.grades[node] is not None else None
 
     def is_accepted(self, node=None):
-        """Does the given node have an accepted verdict? If node is None, for the root. """
+        """Does the given node have an accepted verdict? If node is None, for the root."""
         if node is None:
             node = self.tree.root
         return self.grades[node] is not None and self.grades[node].verdict == 'AC'
 
     def is_rejected(self, node=None):
-        """Does the given node have a rejected verdict? If node is None, for the root. """
+        """Does the given node have a rejected verdict? If node is None, for the root."""
         if node is None:
             node = self.tree.root
         return self.grades[node] is not None and self.grades[node].verdict != 'AC'
@@ -349,7 +343,6 @@ class Grades:
                             f"Grade {aggregated_grade} for {node} already set to {self[node]}"
                         )
 
-
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
         if depth <= 0:
             return
@@ -359,26 +352,17 @@ class Grades:
         branches = ['├─ '] * (len(subgroups) - 1) + ['└─ ']
         for branch, child in zip(branches, subgroups):
             if child not in self.tree.leaves:
-                grade = self.grades[child].grade
-                msg = None
-                if self.expectations is not None:
-                    expectations = self.expectations.get(child)
-                    if expectations is not None:
-                        if grade in expectations:
-                            color = Fore.GREEN
-                        else:
-                            color = Fore.RED
-                            msg = f"Expected {expectations}"
-                    else:
-                        color = Fore.YELLOW
+                if self.is_expected(child):
+                    color = Fore.GREEN
+                    msg = ""
                 else:
-                    color = Fore.YELLOW
+                    color = Fore.RED
+                    msg = f"Expected {self.expectations[child]}"
                 print(
                     f"{prefix + branch + child:{paddinglength}}",
                     f"{color}{self.grades[child]}{Style.RESET_ALL}",
-                    end=' ',
+                    msg,
                 )
-                print(msg or "")
                 extension = '│  ' if branch == '├─ ' else '   '
                 self._rec_prettyprint_tree(
                     child, paddinglength, depth - 1, prefix=prefix + extension
