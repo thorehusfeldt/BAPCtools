@@ -191,31 +191,33 @@ class Grades:
         grade can be just a verdict, like "AC" or a grade like ("AC", 1)
         If score is not given, infer it from the 'accept_score' setting
         """
+        if not testcase in self.tree.leaves:
+            raise KeyError(f"Use __setitem__ only for testcases, not {testcase}")
         _ = list(self.set_grade(testcase, grade))
 
     def set_grade(self, testcase, grade):
         """ The default way of setting a testcase to a grade.
 
-        grade is either a Grade object of a string.
+        grade is either a Grade object of a string (a verdict)
 
-        Returns an iterator of triples of the form
+        Returns a sequence of tuples of the form
 
-            (testcase_, grade_, was_expected)
+            (testnode_, grade_)
 
-        These contain the inferred grades from testcase and upwards.
+        These contain the inferred grades for the testcase and its ancestors, ordered from leaf to root.
         """
         if not testcase in self.tree.leaves:
-            raise KeyError(f"Use __setitem__ only for testcases, not {testcase}")
+            raise ValueError(f"Use set_grade only for testcases, not {testcase}")
         if self.grades[testcase] is not None:
-            raise ValueError(f"Grade for {testcase} was already set")
+            raise ValueError(f"Grade for {testcase} was already set (to {self.grades[testcase]})")
+        settings = self.tree.get_settings(testcase)
         if isinstance(grade, str):
             score = self.tree.get_settings(testcase)[
                 'accept_score' if grade == 'AC' else 'reject_score'
             ]
             grade = Grade(grade, score)
         self.grades[testcase] = grade
-        yield (testcase, grade)
-        yield from self._infer_grade_upwards(testcase)
+        return ((testcase, grade),) + tuple(self.generate_ancestor_grades(testcase))
 
     def __getitem__(self, node: str) -> Grade:
         return self.grades[node]
@@ -316,39 +318,37 @@ class Grades:
                     error(f"No verdict possible for {child}")
             self._infer_expectations(child)
 
-    def _infer_grade_upwards(self, node):
-        """For a node that just changed its grades[node] (from None to a grade), check if this
-        has consequences for its ancestors, and if so, infer grades upwards.
-
-        Note that `accept_if_any_accepted` cannot be graded just on the basis of a single
-        accepted verdict (because the score may be different)
+    def generate_ancestor_grades(self, node):
+        """For a testcase node that just changed its grades[node]
+        (from None to a grade), generate the consequences for its ancestors, if any.
         """
-        if node == self.tree.root:
-            return
-        parent = TestDataTree.parent(node)
-        siblings = self.tree.children[parent]
-        settings = self.tree.settings[parent]
-        first_error_idx = min(
-            (i for i, sib in enumerate(siblings) if self.is_rejected(sib)),
-            default=len(siblings),
-        )
-        if (
-            all(self[sib] is not None for sib in siblings)
-            or settings['on_reject'] == 'break'
-            and all(self.is_accepted(sib) for sib in siblings[:first_error_idx])
-        ):
-            grades = [self[sib] for sib in siblings if self[sib] is not None]
-            aggregated_grade = aggregate(parent, grades, settings=self.tree.get_settings(parent))
+        if self[node] is None or node not in self.tree.leaves:
+            raise ValueError("Expected graded testcase, not {node}")
+        while node != self.tree.root:
+            node = TestDataTree.parent(node)
+            children = self.tree.children[node]
+            settings = self.tree.settings[node]
+            first_error_idx = min(
+                (i for i, c in enumerate(children) if self.is_rejected(c)),
+                default=len(children),
+            )
+            if (
+                all(self[c] for c in children)
+                or settings['on_reject'] == 'break'
+                and all(self.is_accepted(c) for c in children[:first_error_idx])
+            ):
+                grades = [self[c] for c in children if self[c] is not None]
+                aggregated_grade = aggregate(node, grades, settings=settings)
 
-            if self[parent] is not None:
-                if self[parent] != aggregated_grade:
-                    raise ValueError(
-                        f"Grade {aggregated_grade} for {parent} inferred from {node} already set to {self[parent]}"
-                    )
-            else:
-                self.grades[parent] = aggregated_grade
-                yield (parent, aggregated_grade)
-                yield from self._infer_grade_upwards(parent)
+                if self[node] is None:
+                    self.grades[node] = aggregated_grade
+                    yield (node, aggregated_grade)
+                else:
+                    if self[node] != aggregated_grade:
+                        raise ValueError(
+                            f"Grade {aggregated_grade} for {node} already set to {self[node]}"
+                        )
+
 
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
         if depth <= 0:
@@ -397,7 +397,7 @@ class Grades:
 
 
 def aggregate(path, grades, settings):
-    """Given a list of grades, determine the default grader's grade per testgroup."""
+    """Given a list of grades and settings, determine the default grader's grade."""
     if not grades:
         log(f'No grades on {path}, so no graders ran')
         return ('AC', 0)
