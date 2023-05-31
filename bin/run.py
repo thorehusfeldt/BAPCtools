@@ -112,7 +112,10 @@ class Testcase:
             return None
         data = self.testdata_yaml[key]
         if isinstance(data, str):
-            data = {'name': data}
+            if config.args.input_validator_flags_are_flags:
+                return data.split()
+            else:
+                data = {'name': data}
         if isinstance(data, dict):
             data = [data]
         for d in data:
