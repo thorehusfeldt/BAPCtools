@@ -133,57 +133,7 @@ def test_Grades_accept_score_for_testgroup():
     assert grades3["."] == Grade("AC", 46)
 
 
-def test_set_excpecations_four_different_ways():
-    grades = Grades(
-            ["secret/1", "secret/2", "secret/3", "secret/4"],
-            expectations= {
-                'secret': {
-                    '1': 'AC',
-                    '2': ['AC'],
-                    '3': { 'verdict': 'AC' },
-                    '4': { 'verdict': ['AC'] }
-                    }})
-    assert grades.expectations["secret/1"].verdicts == set(["AC"])
-    assert grades.expectations["secret/2"].verdicts == set(["AC"])
-    assert grades.expectations["secret/3"].verdicts == set(["AC"])
-    assert grades.expectations["secret/4"].verdicts == set(["AC"])
 
-def test_Expectations_accept_inherited_downwards():
-    # First see that AC from the root gets passed down
-    grades4 = Grades(
-            GROUPS,
-            expectations = "AC"
-            )
-    assert grades4.expectations["."].verdicts == set(["AC"])
-    assert grades4.expectations["secret"].verdicts == set(["AC"])
-    assert grades4.expectations["secret/group1/foo"].verdicts == set(["AC"])
-
-def test_Expectations_with_testgroups():
-    # Richer example of expecations
-    grades5 = Grades(
-            GROUPS,
-            expectations = {
-                'verdict': ['WA', 'TLE'],
-                'sample': 'AC',
-                'secret': {
-                    'group1': ['AC']
-                    }
-                }
-            )
-    assert grades5.expectations["."].verdicts == set(["WA", "TLE"])
-    assert grades5.expectations["sample"].verdicts == set(["AC"])
-    assert grades5.expectations["secret/group1"].verdicts == set(["AC"])
-    assert grades5.expectations["secret/group1/foo"].verdicts == set(["AC"])
-    assert "TLE" in grades5.expectations["secret/group2/baz"].verdicts
-
-def test_Expectations_one_testgroup():
-    # Very simple example of expecations
-    grades = Grades(
-            GROUPS,
-            expectations = { 'secret': { 'group1': 'AC' } }
-            )
-    assert grades.expectations["secret/group1"].verdicts == set(["AC"])
-    assert "TLE" in grades.expectations["secret/group2"].verdicts
 
 def test_Grades_on_reject_break():
     # check that test group is graded as soon as it can (but not earlier)

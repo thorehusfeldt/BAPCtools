@@ -18,11 +18,15 @@ import re
 import subprocess
 from pathlib import Path
 
+from collections import defaultdict
+
 from util import log, warn, error, debug
+from expectations import Expectations
 
 # pylint: disable = import-error
 from colorama import Fore, Style
 import config
+
 
 
 def ancestors(paths):
@@ -130,42 +134,11 @@ class TestDataTree:
         return self.settings[TestDataTree.parent(node) if node in self.leaves else node]
 
 
-class Expectation:
-    """The expectation of a testnode."""
 
-    def __init__(self, verdicts=None, score_range=None):
-        self.verdicts = set(verdicts or ["AC", "WA", "TLE", "RTE"])
-        self.score_range = score_range or "-inf inf"
-
-    def __contains__(self, judgement):
-        """Judgement can be verdict:str or a Grade,
-        where score can be int, float, or even str
-        """
-        if isinstance(judgement, Grade):
-            verdict = judgement.verdict
-            lo, hi = map(float, self.score_range.split())
-            score_ok = lo <= float(judgement.score) <= hi
-        else:
-            verdict = judgement
-            score_ok = True
-
-        return verdict in self.verdicts and score_ok
-
-    def __repr__(self):
-        return str(f"{self.verdicts} {self.score_range}")
-
-    def __str__(self):
-        if len(self.verdicts) == 1:
-            res = next(iter(self.verdicts))
-            if res == 'AC':
-                res.append('(' + '..'.join(res.score.split()) + ')')
-        else:
-            res = str(self.verdicts)
-        return res
 
 
 class Grades:
-    """Expectations and grades, typically for a specific submission and set of testcases.
+    """Grades, typically for a specific submission and set of testcases.
 
     Initially, no grades are known; when a grade is known (typically when a submission is run),
     set it with self.grade[testcase] = (verdict, score) or self.set_verdict[testcase] = verdict.
@@ -185,16 +158,14 @@ class Grades:
         from the specification.)
         """
         self.tree = TestDataTree(testcases, testdata_settings)
-        self.expectations = {node: Expectation() for node in self.tree.nodes}
-        if expectations is not None:
-            self._set_expectations(expectations, self.tree.root)
-            self._infer_expectations(self.tree.root)
+        self.expectations = Expectations(expectations, testdata_settings=testdata_settings)
         self.grades: int = {node: None for node in self.tree.nodes}
 
-    def set_grade(self, testcase, verdict, score=None):
+    def set_grade(self, testcase: str, verdict: str, score: float = None):
         """
-        Set the grade of this testcase. If score is given, use that; otherwise use defaults
-        `accept_score` or `reject_score`.
+        Set the grade of this testcase.
+        Verdict is one of 'AC', 'RTE', 'JE', 'TLE', or 'WA'.
+        If score is given, use that; otherwise use defaults `accept_score` or `reject_score`.
         Returns a sequence of tuples of the form
 
             (testnode_, grade_)
@@ -203,8 +174,8 @@ class Grades:
         """
         if not testcase in self.tree.leaves:
             raise ValueError(f"Use set_grade only for testcases, not {testcase}")
-        if self.grades[testcase] is not None:
-            raise ValueError(f"Grade for {testcase} was already set (to {self.grades[testcase]})")
+        if self[testcase] is not None:
+            raise ValueError(f"Grade for {testcase} was already set (to {self[testcase]})")
         settings = self.tree.get_settings(testcase)
         if score is None:
             score = self.tree.get_settings(testcase)[
@@ -223,7 +194,7 @@ class Grades:
         """
         if node is None:
             node = self.tree.root
-        return self.grades[node].verdict if self.grades[node] is not None else None
+        return self[node].verdict if self[node] is not None else None
 
     def score(self, node: str = None) -> float:
         """The final grade for a node. If node is None, for the root.
@@ -232,85 +203,27 @@ class Grades:
         """
         if node is None:
             node = self.tree.root
-        return self[node].score if self.grades[node] is not None else None
+        return self[node].score if self[node] is not None else None
 
     def is_accepted(self, node=None):
         """Does the given node have an accepted verdict? If node is None, for the root."""
         if node is None:
             node = self.tree.root
-        return self.grades[node] is not None and self.grades[node].verdict == 'AC'
+        return self[node] is not None and self[node].verdict == 'AC'
 
     def is_rejected(self, node=None):
         """Does the given node have a rejected verdict? If node is None, for the root."""
         if node is None:
             node = self.tree.root
-        return self.grades[node] is not None and self.grades[node].verdict != 'AC'
+        return self[node] is not None and self[node].verdict != 'AC'
 
     def is_expected(self, node=None):
         if node is None:
             node = self.tree.root
-        if self.grades[node] is None:
+        if self[node] is None:
             raise ValueError(f"No grade determined for {node}")
-        return self.grades[node] in self.expectations[node]
+        return self.expectations.is_expected(self[node], node)
 
-    def _set_expectations(self, expectations, node):
-        """Recursively transfer the given expectations (typically from a yaml dict)
-        to the testdatatree rooted at the given node.
-
-        In the simplest case, expectations is just a string "AC".
-        But it can be a list of verdicts or a nested dict as well.
-        """
-
-        if isinstance(expectations, dict):
-            verdicts_for_node = expectations.get('verdict')  # could be None, str, or ist
-            for testgroup in expectations:  # 'sample', 'secret', 'edgecases', ...
-                if testgroup in ['verdict', 'score']:
-                    continue
-                longgroupname = str(Path(node) / Path(testgroup))
-                if not longgroupname in self.tree.nodes:
-                    warn(f"Found expected grade for {longgroupname}, but no testcases")
-                self._set_expectations(expectations[testgroup], longgroupname)
-        else:
-            verdicts_for_node = expectations
-
-        if verdicts_for_node is not None:
-            if isinstance(verdicts_for_node, str):
-                verdicts_for_node = [verdicts_for_node]
-
-            self.expectations[node].verdicts &= set(verdicts_for_node)
-            if self.expectations[node].verdicts == set():
-                raise ValueError(f"Expectations cannot be the empty set, got {expectations}")
-        # TODO set ranges for scores from testdata and expectations
-
-    def _infer_expectations(self, node):
-        """Visit self.tree from given internal tesddatatree node and infer expecations downwards.
-
-        The following inference rules are implemented:
-
-        1.  If the expected verdicts of the given node is the singleton {'AC'} and
-            and the grader flag is neither `accept_if_any_accepted` nor `always_accept`
-            then all its children inherit the expectation {'AC'}.
-            If node is the root, and `ignore_sample` is set, `sample` is excempt from this.
-        2.  (Nothing else so far. Could do some cool stuff with error sets, but not
-            worth it because on_reject: break, the default, invalidates many inference rules)
-
-        """
-        tree = self.tree
-        if node in tree.leaves:
-            return
-
-        grader_flags = tree.get_settings(node)['grader_flags']
-        inherit_accepted = (self.expectations[node].verdicts == set(['AC'])) and (
-            'accept_if_any_accepted' not in grader_flags or 'always_accept' not in grader_flags
-        )
-        for child in tree.children[node]:
-            if inherit_accepted and not (
-                node == tree.root and 'ignore_sample' in tree.get_settings(node)
-            ):
-                self.expectations[child].verdicts &= set(['AC'])
-                if len(self.expectations[child].verdicts) == 0:
-                    error(f"No verdict possible for {child}")
-            self._infer_expectations(child)
 
     def generate_ancestor_grades(self, node):
         """For a testcase node that just changed its grades[node]
@@ -340,7 +253,7 @@ class Grades:
                 else:
                     if self[node] != aggregated_grade:
                         raise ValueError(
-                            f"Grade {aggregated_grade} for {node} already set to {self[node]}"
+                            f"Grade {aggregated_grade} for {node} conflicts with earlier grade {self[node]}"
                         )
 
     def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
@@ -357,11 +270,10 @@ class Grades:
                     msg = ""
                 else:
                     color = Fore.RED
-                    msg = f"Expected {self.expectations[child]}"
+                    msg = f", expected {self.expectations[child]}"
                 print(
                     f"{prefix + branch + child:{paddinglength}}",
-                    f"{color}{self.grades[child]}{Style.RESET_ALL}",
-                    msg,
+                    f"{color}{self[child]}{msg}{Style.RESET_ALL}",
                 )
                 extension = '│  ' if branch == '├─ ' else '   '
                 self._rec_prettyprint_tree(
