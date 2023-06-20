@@ -1,16 +1,62 @@
-"""Set expectations for a submission. 
+"""Expectations for a submission.
 
 Can be defined from various sources.
 
-- expliclty by a yaml-like structure as defined in submissions/expectations.yaml
+From a Dictionary
+-----------------
 
-- explicitly by the presence of @EXPECTED_RESULTS@ somewhere in the source code. This
-  applies only to the final (root) verdict.
+The most versatile and fine-grained way to set expectations is expliclty in a dictionary,
+typically defined by a file 'submissions/expectations.yaml'. The following simple example
+expects the submission to recieve a final verdict of 'WA' or 'TLE' (but not 'AC' or 'RTE'),
+expects it to pass the sample inputs in 'sample', and to fail with 'WA' on a specified
+secret testcase.
 
-- implicitly from a directory name, for a submission residing in
+>>> e = Expectations({'verdict': ['WA', 'TLE'], 'sample': 'AC', 'secret/038-edgecase': 'WA'})
+>>> e.verdicts() == set(['WA', 'TLE'])
+True
+>>> e.verdicts("sample")
+{'AC'}
+>>> e.is_expected('WA', "secret/038-edgecase")
+True
+
+List of EXPECTED_RESULTS
+------------------------
+
+The top-level verdict can be constrained to a subset of expected verdicts, typically
+using the keyword @EXPECTED_RESULTS@ somewhere in the source code.
+
+>>> e = Expectations(expected_results=['WRONG-ANSWER', 'TIMELIMIT'])
+>>> e.verdicts() == set(['WA', 'TLE'])
+True
+
+Implied by the Directory Name
+-----------------------------
+
+Expectations for the top-level verdict can be impliclty set from directory name of the
+submission residing in
+
       <problemname>/submissions/<dirname>
-  where <dirname> can be 'accepted', 'wrong_answer', 'time_limit_exceeded', or 'run_time_error'.
-  This applies only to the final (root) verdict.
+
+where <dirname> can be 'accepted', 'wrong_answer', 'time_limit_exceeded', or 'run_time_error'.
+
+>>> e = Expectations(dirname='wrong_answer')
+>>> e.verdicts()
+{'WA'}
+
+Terminology
+-----------
+
+verdict
+    Any of 'AC', 'WA', 'RTE', 'TLE'. (Note that the verdict 'JE' is never expected.)
+
+score
+    A finite number, often just an integer in the range {0, ..., 100}, but can be a float.
+
+grade
+    A tuple (verdict, score). Sometimes, maybe just a verdict (as in the argument to 'is_expected').
+
+range
+    A string of two space-separated numbers, like '0 30' or '-inf 43' or '3.14 3.14'.
 """
 
 from pathlib import Path
@@ -30,11 +76,27 @@ class Expectations:
 
         Preferably, exactly one of these should be given; when more are given,
         they should agree. The first two can set only the topmost final verdict;
-        the third can also specify scores, ranges, and expecations for subgroups 
+        the third can also specify scores, ranges, and expecations for subgroups
         and individual testcases.
 
-        Args:
-          testdata_settings: If testdata_settings[path] exists, it is a dict that defines
+        Arguments
+        ---------
+
+        dirname
+            corresponding to (1) above; any of 'accepted', 'wrong_answer',
+            'time_limit_exceeded', 'run_time_error'; all other value are equivalent
+            to 'dirname=None'.
+
+        expected_results
+            corresponding to (2) above; a list of strings like 'CORRECT',
+            'WRONG-ANSWER', in the @EXPECTED_RESULTS@ DOMjudge tradition.
+
+        expectations
+            corresponding to (3) above; a string, list of verdicts, or map,
+            as defined in 'expectations.yaml'.
+
+        testdata_settings
+            If testdata_settings[path] exists, it is a dict that defines
             the testdata settings for the keys 'grader_flags' and 'range' for the node
             at that path. Otherwise these setting are inherited from ancestors and eventually
             defaults as per the specification.
@@ -42,15 +104,6 @@ class Expectations:
             directory, such as 'sample' or 'secret/group1/013-tiny'. The root's path
             can be specified as the empty string '' or as '.'.
 
-          dirname: corresponding to (1) above; any of 'accepted', 'wrong_answer',
-            'time_limit_exceeded', 'run_time_error'; all other value are equivalent
-            to 'dirname=None'.
-
-          expected_results: corresponding to (2) above; a list of strings like 'ACCEPTED',
-            'WRONG-ANSWER', in the @EXPECTED_RESULTS@ DOMjudge tradition.
-
-          expectations: corresponding to (3) above; a string, list of verdicts, or map,
-            as defined in 'expectations.yaml'.
         """
         self._testdata_settings: dict[Path, dict[str, str]] = (
             {Path(k): v for k, v in testdata_settings.items()}
@@ -133,15 +186,18 @@ class Expectations:
 
 
     @lru_cache
-    def __getitem__(self, node):
+    def __getitem__(self, node:str):
         """The expecations for the given node.
 
-        Arguments:
-          node: A string, like "sample" or "secret/group1/034-small".
+        Arguments
+        ---------
+        node
+            A string, like "sample" or "secret/group1/034-small".
             Empty string "" or "." means the root.
 
-        Return:
-          A tuple (verdicts, range); see the methods of those names.
+        Returns
+        -------
+        A tuple (verdicts, range); see the methods of those names.
         """
         path = Path(node)
         verdicts = self._specified_verdicts.get(path) or set(["AC", "WA", "TLE", "RTE"])
@@ -167,11 +223,14 @@ class Expectations:
     def verdicts(self, node=''):
         """The verdicts expected for this node.
 
-        Arguments:
-          node: A string, like "sample" or "secret/group1/034-small".
-                Empty string "", ".", or missing argument means the root.
-        return:
-          A nonempty subset of {"AC", "WA", "TLE", "RTE"}
+        Arguments
+        ---------
+        node
+            A string, like "sample" or "secret/group1/034-small".
+            Empty string "", ".", or missing argument means the root.
+        Return
+        ------
+        A nonempty subset of {"AC", "WA", "TLE", "RTE"}
         """
 
         return self[node][0]
@@ -188,8 +247,8 @@ class Expectations:
         return self[node][1]
 
     @lru_cache
-    def testdata_settings(self, path):
-        """Return the testdata settings of 'grader_flags' and 'range' for this path,
+    def testdata_settings(self, path) -> dict[str, str]:
+        """The testdata settings of 'grader_flags' and 'range' for this path,
         possibly as implied by ancestors and defaults.
         """
         parent_settings = (
@@ -199,24 +258,32 @@ class Expectations:
         )
         return parent_settings | (self._testdata_settings.get(path) or {})
 
-    def is_expected(self, judgement, node=''):
-        """Is the given judgement expected by the given node?
+    def is_expected(self, grade:str | tuple[str, float], node=''):
+        """Is the given grade expected by the given node?
 
-        Arguments:
-          judgement: either a verdict as a string "AC" or a tuple (verdict, score)
+        Arguments
+        ---------
+        grade
+            either a verdict as a string like "AC" or a grade as a tuple (verdict, score),
             where score is a number.
-          node: A string, like "sample" or "secret/group1/034-small".
-            Empty string "" or missing argument is the root.
 
+        node
+            A string, like "sample" or "secret/group1/034-small". Empty string "" or missing
+            argument is the root.
         """
 
         verdicts, score_range = self[node]
-        if isinstance(judgement, tuple):
-            verdict, score = judgement
+        if isinstance(grade, tuple):
+            verdict, score = grade
             low, high = map(float, score_range.split())
             score_ok = low <= float(score) <= high
         else:
-            verdict = judgement
+            verdict = grade
             score_ok = True
 
         return verdict in verdicts and score_ok
+
+if __name__ == "__main__":
+    import doctest
+
+    doctest.testmod()

@@ -1,26 +1,61 @@
-""" Classes and static methods for test groups and grades.
+"""Classes and static methods for test groups and grades,
+using the default grader.
 
-    Terminology used here:
+Terminology
+-----------
+verdict
+    one of the strings 'AC', 'WA', 'TLE', 'RTE', or 'JE'
 
-    - verdict one of 'AC', 'WA', 'TLE', 'RTE', or 'JE'
-    - score:float a number
-    - grade: a tuple of (verdict, score)
+score
+    a number, float
 
-    - testdatatree: the tree given by the full filenames in data
-    - testgroup: an *internal* node in the test data tree (spec is unclear about this)
-    - testcase: a leaf of the test data tree
+grade
+    a tuple of (verdict, score); score may be None for a testcase.
 
-    The verdict at the root of the testdatatree is the final verdict of the
-    default grader on all the testdata.
+gradeable
+    A testcase or a testroup, i.e., something that can have a grade.
+
+testdata
+    The simple directed acyclic graph whose leaves are testcases.
+    The testdata without the leaves form a rooted tree.
+
+testcase
+    A leaf in the testdata.
+    Testcases have unique names like 'empty-graph' or '012-random-max_n';
+    they may not contain '/'.
+    The predecessors of a testcase are testgroups, but not the root.
+
+testgroup
+    An internal node in the testdata. The testgroups for a rooted
+    tree. The root has one or two children, which are called 'sample'
+    and 'secret'. The names of all other testgroups, if they exist,
+    describe their position in the testdata tree, such as 'secret/group1'
+    or 'secret/connected/cycles'.
+
+
+Notes
+-----
+
+The conventions here are both more and less restrictive than the specification.
+
+They are *more* restrictive in the sense that each testcase has a unique (short)
+name. For instance, 'sample/1' and 'secret/1' refer to the same testcase, namely
+testcase '1'. Every testcase is graded at most once. This follows the practice
+of reusing testcases in other testgroups, for instance including all sample
+instances in the secret instances or including testgroups in other testgroups.
+
+They are *less* restrictive because not both 'sample' and 'secret' need to exist.
+Such situations arise during problem development, when a submission is run against
+only a subset of testcases.
+
 """
 
 import re
 import subprocess
 from pathlib import Path
+from functools import lru_cache
 
-from collections import defaultdict
-
-from util import log, warn, error, debug
+from util import log, error, debug
 from expectations import Expectations
 
 # pylint: disable = import-error
@@ -28,279 +63,301 @@ from colorama import Fore, Style
 import config
 
 
-
 def ancestors(paths):
     """Return the set of all ancestors of the given paths"""
-    return set(str(ancestor) for p in paths for ancestor in Path(p).parents)
-
-
-class Grade:
-    def __init__(self, verdict, score=0):
-        self.verdict = verdict
-        self.score = score
-
-    def __str__(self):
-        res = {
-            "AC": "ACCEPTED",
-            "WA": "WRONG_ANSWER",
-            "TLE": "TIME_LIMIT_EXCEEDED",
-            "RTE": "RUN_TIME_ERROR",
-        }[self.verdict]
-        if self.verdict == "AC":
-            res += f" {self.score:.0f}"
-        return res
-
-    def __repr__(self):
-        return repr(self.verdict) + repr(self.score)
-
-    def __eq__(self, other):
-        return self.score == other.score and self.verdict == other.verdict
+    return set(ancestor for path in paths for ancestor in path.parents)
 
 
 # pylint: disable=too-few-public-methods
-class TestDataTree:
-    """The tree for all testcases and testgroups of a problem (in fact, for a subset of the
-    testcases of a problem).
-    This forms a tree defined by self.children[node], leaves are testcases.
-    Tree nodes are identified by strings,
-    the root is self.root == '.' whose children (if they exist) are
-    'sample' and 'secret'
-    """
+class TestData:
+    """The structure of testcases and testgroups of a problem."""
 
-    def __init__(self, testcasepaths, settings=None):
-        """testcasepaths is an iterable of strings
+    # Internally, testgroups are identified by Path objects; the root is Path()
+    # whose children (if they exist) are the testgroups Path('sample') and Path('secret').
+    # All other testgroup paths start with 'sample/' or 'secret/'
 
-        settings is given as a dict for some(!) of the *internal* nodes,
-        it was either set expliclty in testdata.yaml for the given
-        testgroup or from ancestors as per speficication. From this, the
-        testdata for every internal node is inferred using the inheritance
-        logic implemented in verifyproblem.
-        """
+    def __init__(self, cases, settings=None):
+        """See Grades.__init__()"""
 
-        self.root = '.'
+        self.root = Path()
+        casepaths = sorted(Path(tc) for tc in cases)
 
-        # Build tree structure of testcases and test(sub)groups
-        self.leaves = set(testcasepaths)
-        self.children = {node: [] for node in ancestors(self.leaves)}
-        self.nodes = self.leaves | set(self.children.keys())
-        for node in self.nodes:
-            if node != self.root:
-                self.children[str(Path(node).parent)].append(node)
-        # sort all children lexicographically; this is important for grading choices such as
-        # first_error, ignore_sample
-        for node in self.children:
-            self.children[node].sort()
+        self.cases: list[str] = sorted(tp.name for tp in casepaths)
 
-        # Determine the settings for every internal node
-        if settings is None:
-            settings = {}
-        defaults = {
-            'on_reject': 'break',
-            # 'grading': not implemented, so not set
-            'grader_flags': '',
-            'accept_score': '1',
-            'reject_score': '0',
-            'range': '-inf inf'
-            # '{input, output}_validator_flags': not relevant for grading, so not set
+        # The testgroups containing a testcase
+        self.groups_for_case: dict[str, list[Path]] = {tc: [] for tc in self.cases}
+
+        # The testgroups and testcases contained in a testgroup, in alphabetic order.
+        # Testgroups have type Path, testcases have type str.
+        self.gradeables_for_group: dict[Path, list[Path | str]] = {
+            path: [] for path in ancestors(casepaths)
         }
 
-        self.settings = {'.': defaults | (settings.get('.') or {})}
-        for node in iter(self):
-            if node in self.leaves or node == '.':
-                continue
-            parent = TestDataTree.parent(node)
-            self.settings[node] = self.settings[parent] | (settings.get(node) or {})
+        for path in casepaths:
+            self.groups_for_case[path.name].append(path.parent)
+            self.gradeables_for_group[path.parent].append(path.name)
 
-    def __iter__(self):
-        """Iterate over the nodes in bfs-order and alphabetically:
-        ('.', 'sample', 'secret', 'sample/1'...)
-        """
-        queue = ['.']
-        for node in queue:
-            yield node
-            if node not in self.leaves:
-                for child in self.children[node]:
-                    queue.append(child)
+        for path in self.gradeables_for_group:
+            if path != self.root:
+                self.gradeables_for_group[path.parent].append(path)
+        # sort all children of a testgroup lexicographically; this is
+        # important for grader settings such as first_error, ignore_sample
+        for path in self.gradeables_for_group:
+            self.gradeables_for_group[path].sort(key=str)
 
-    @staticmethod
-    def parent(node):
-        """The parent of a node; '.' is the root."""
-        return str(Path(node).parent)
+        self._testdata_settings: dict[Path, dict[str, str]] = (
+            {Path(k): v for k, v in settings.items()} if settings is not None else {}
+        )
 
-    def get_settings(self, node):
-        """Get the settings (as a dict) relevant for the given node, which can
-        be a testcase or an internal node.
-        """
-        return self.settings[TestDataTree.parent(node) if node in self.leaves else node]
-
-
-
+    @lru_cache
+    def testdata_settings(self, path: Path):
+        """The testdata settings for this path, possibly as implied by ancestors and defaults."""
+        parent_settings = (
+            self.testdata_settings(path.parent)
+            if path != Path()
+            else {
+                'on_reject': 'break',
+                # 'grading': not implemented, so not set
+                'grader_flags': '',
+                'accept_score': '1',
+                'reject_score': '0',
+                'range': '-inf inf',
+            }
+        )
+        return parent_settings | (self._testdata_settings.get(path) or {})
 
 
 class Grades:
     """Grades, typically for a specific submission and set of testcases.
 
-    Initially, no grades are known; when a grade is known (typically when a submission is run),
-    set it with self.grade[testcase] = (verdict, score) or self.set_verdict[testcase] = verdict.
-    When all testcases are graded (possibly even earlier), self.grade.verdict() has final verdict
+    Initially, no grades are known; when a grade is known (typically when a
+    submission is run), set it with 'self.set_verdict(testcase, verdict)'.
+    When all testcases are graded (possibly even earlier), self.verdict()
+    returns the final verdict.
 
-    self[node]  maps strings to tuples (verdict, score)
-    self.verdict(node) and self.score(node) access the components
+    Examples
+    --------
+    >>> g = Grades(['sample/1', 'secret/foo', 'secret/bar'])
+    >>> _ = g.set_verdict('1', 'AC')
+    >>> _ = g.set_verdict('bar', 'AC')
+    >>> g.verdict() is None
+    True
+    >>> _ = g.set_verdict('foo', 'WA')
+    >>> g.verdict()
+    'WA'
+
+    You can access the verdicts of testgroups by name
+    >>> g.verdict('sample'), g.verdict('secret')
+    ('AC', 'WA')
     """
 
-    def __init__(self, testcases, expectations=None, testdata_settings=None):
+    def __init__(self, testcasepaths, testdata_settings=None):
         """
-        expectations is typically from a yaml file, see _set_expectations
+        Arguments
+        ---------
 
-        testdata_settings maps every internal node to either None or a dict of
-        settings that were explicitly given in `testdata.yaml` for that
-        node or an ancestor of it. (But it does not specify the default settings
-        from the specification.)
+        testcasepaths: a list of full names for all testcases, like ['sample/1', 'secret/foo']
+
+        testdata_settings: maps testgroups (strings) to settings (dicts),
+            typically  given in 'testdata.yaml'
         """
-        self.tree = TestDataTree(testcases, testdata_settings)
-        self.expectations = Expectations(expectations, testdata_settings=testdata_settings)
-        self.grades: int = {node: None for node in self.tree.nodes}
+        self.testdata = TestData(testcasepaths, testdata_settings)
+        self._grade: dict[Path | str, tuple[str, float] | None] = {
+            path: None for path in self.testdata.gradeables_for_group
+        } | {tcname: None for tcname in self.testdata.cases}
 
-    def set_grade(self, testcase: str, verdict: str, score: float = None):
+    def set_verdict(
+        self, testcase: str, verdict: str, score: float | None = None
+    ) -> list[str, tuple[str, float]] | None:
         """
-        Set the grade of this testcase.
-        Verdict is one of 'AC', 'RTE', 'JE', 'TLE', or 'WA'.
-        If score is given, use that; otherwise use defaults `accept_score` or `reject_score`.
-        Returns a sequence of tuples of the form
+        Set the verdict of this testcase. Returns a list of testgroup grades that
+        are the consequens of this verdict.
 
-            (testnode_, grade_)
+        Arguments
+        ---------
+        testcase: the (short) name of a testcase
+        verdict: one of 'AC', 'RTE', 'JE', 'TLE', or 'WA'.
+        score: a float, optional
 
-        These contain the inferred grades for the testcase and its ancestors, ordered from leaf to root.
+        Returns
+        -------
+        a sequence of tuples of the form
+
+            (testgroup, grade)
+
+        These contain the inferred grades for the testcase and its ancestors, ordered from
+        leaf to root. The testgroups are given as strings like 'secret/group1'; the root
+        testgroup is called '.'.
+
+
+        Example
+        -------
+        >>> g = Grades(['secret/group1/foo'])
+        >>> g.set_verdict('foo', 'AC')
+        [('secret/group1', ('AC', 1.0)), ('secret', ('AC', 1.0)), ('.', ('AC', 1.0))]
+        >>> h = Grades(['sample/1', 'secret/foo', 'secret/bar'])
+        >>> h.set_verdict('foo', 'AC')
+        []
+
+        A testcase can appear in several testgroups, so the consequences need not form a
+        path:
+        >>> h = Grades(['secret/foo', 'sample/foo'])
+        >>> h.set_verdict('foo', 'AC')
+        [('sample', ('AC', 1.0)), ('secret', ('AC', 1.0)), ('.', ('AC', 2.0))]
         """
-        if not testcase in self.tree.leaves:
+        if not testcase in self.testdata.cases:
             raise ValueError(f"Use set_grade only for testcases, not {testcase}")
-        if self[testcase] is not None:
-            raise ValueError(f"Grade for {testcase} was already set (to {self[testcase]})")
-        settings = self.tree.get_settings(testcase)
-        if score is None:
-            score = self.tree.get_settings(testcase)[
-                'accept_score' if verdict == 'AC' else 'reject_score'
-            ]
-        self.grades[testcase] = grade = Grade(verdict, score)
-        return ((testcase, grade),) + tuple(self.generate_ancestor_grades(testcase))
+        if self._grade[testcase] is not None and self._grade[testcase] != (verdict, score):
+            raise ValueError(f"Grade for {testcase} was already set (to {self._grade[testcase]})")
+        self._grade[testcase] = (verdict, score)
+        consequences = []
+        for path in self.testdata.groups_for_case[testcase]:
+            consequences.extend(self.generate_ancestor_grades(path))
+        return consequences
 
-    def __getitem__(self, node: str) -> Grade:
-        return self.grades[node]
+    def grade(self, node: str | None = None) -> tuple[str, float] | None:
+        """The grade for a testgroup given as a string. If node is None, for the root.
 
-    def verdict(self, node: str = None) -> str:
-        """The final verdict for a node. If node is None, for the root.
+        Returns:
+            a tuple (verdict, score), or None if no grade has (yet) been determined.
+        """
+        if node is None:
+            node = "."
+        return self._grade[node if node in self.testdata.cases else Path(node)]
+
+    def verdict(self, node: str | None = None) -> str | None:
+        """The verdict for a node given as a string. If node is None, for the root.
 
         Returns None if no grade has (yet) been determined.
         """
-        if node is None:
-            node = self.tree.root
-        return self[node].verdict if self[node] is not None else None
+        grade = self.grade(node)
+        return grade[0] if grade is not None else None
 
-    def score(self, node: str = None) -> float:
-        """The final grade for a node. If node is None, for the root.
+    def score(self, node: str | None = None) -> float | None:
+        """The score for a node. If node is None, for the root.
 
         Returns None if no grade has (yet) been determined.
         """
-        if node is None:
-            node = self.tree.root
-        return self[node].score if self[node] is not None else None
+        grade = self.grade(node)
+        return grade[1] if grade is not None else None
 
-    def is_accepted(self, node=None):
+    def is_accepted(self, node: str | None = None) -> bool:
         """Does the given node have an accepted verdict? If node is None, for the root."""
-        if node is None:
-            node = self.tree.root
-        return self[node] is not None and self[node].verdict == 'AC'
+        return self.verdict(node) == 'AC'
 
-    def is_rejected(self, node=None):
+    def is_rejected(self, node=None) -> bool:
         """Does the given node have a rejected verdict? If node is None, for the root."""
-        if node is None:
-            node = self.tree.root
-        return self[node] is not None and self[node].verdict != 'AC'
+        return self.verdict(node) not in [None, 'AC']
 
-    def is_expected(self, node=None):
-        if node is None:
-            node = self.tree.root
-        if self[node] is None:
-            raise ValueError(f"No grade determined for {node}")
-        return self.expectations.is_expected(self[node], node)
-
-
-    def generate_ancestor_grades(self, node):
-        """For a testcase node that just changed its grades[node]
+    def generate_ancestor_grades(self, path):
+        """For a path of testcase node that just changed its grades[path]
         (from None to a grade), generate the consequences for its ancestors, if any.
         """
-        if self[node] is None or node not in self.tree.leaves:
-            raise ValueError("Expected graded testcase, not {node}")
-        while node != self.tree.root:
-            node = TestDataTree.parent(node)
-            children = self.tree.children[node]
-            settings = self.tree.settings[node]
+        while True:
+            children = self.testdata.gradeables_for_group[path]
+            settings = self.testdata.testdata_settings(path)
             first_error_idx = min(
                 (i for i, c in enumerate(children) if self.is_rejected(c)),
                 default=len(children),
             )
             if (
-                all(self[c] for c in children)
+                all(self._grade[c] for c in children)
                 or settings['on_reject'] == 'break'
                 and all(self.is_accepted(c) for c in children[:first_error_idx])
             ):
-                grades = [self[c] for c in children if self[c] is not None]
-                aggregated_grade = aggregate(node, grades, settings=settings)
+                grades = [self.grade(c) for c in children if self.grade(c) is not None]
+                grades_with_scores = [
+                    (
+                        verdict,
+                        score
+                        if score is not None
+                        else settings['accept_score' if verdict == 'AC' else 'reject_score'],
+                    )
+                    for verdict, score in grades
+                ]
+                aggregated_grade = aggregate(grades_with_scores, settings=settings)
 
-                if self[node] is None:
-                    self.grades[node] = aggregated_grade
-                    yield (node, aggregated_grade)
-                else:
-                    if self[node] != aggregated_grade:
-                        raise ValueError(
-                            f"Grade {aggregated_grade} for {node} conflicts with earlier grade {self[node]}"
-                        )
+                if self._grade[path] is None:
+                    self._grade[path] = aggregated_grade
+                    yield (str(path), aggregated_grade)
+                elif self._grade[path] != aggregated_grade:
+                    raise ValueError(
+                        f"Grade {aggregated_grade} for {path.name} "
+                        + f"contradicts {self._grade[path]}"
+                    )
+            if path == Path():
+                break
+            path = path.parent
 
-    def _rec_prettyprint_tree(self, node, paddinglength, depth, prefix: str = ''):
-        if depth <= 0:
-            return
-        subgroups = list(
-            sorted(child for child in self.tree.children[node] if child not in self.tree.leaves)
-        )
-        branches = ['├─ '] * (len(subgroups) - 1) + ['└─ ']
-        for branch, child in zip(branches, subgroups):
-            if child not in self.tree.leaves:
-                if self.is_expected(child):
-                    color = Fore.GREEN
-                    msg = ""
-                else:
-                    color = Fore.RED
-                    msg = f", expected {self.expectations[child]}"
-                print(
-                    f"{prefix + branch + child:{paddinglength}}",
-                    f"{color}{self[child]}{msg}{Style.RESET_ALL}",
-                )
-                extension = '│  ' if branch == '├─ ' else '   '
-                self._rec_prettyprint_tree(
-                    child, paddinglength, depth - 1, prefix=prefix + extension
-                )
+    def __str__(self):
+        return self.tree_format()
 
-    def prettyprint_tree(self, maxdepth=3):
-        """Print verdicts for the internal nodes of the graded testdata tree"""
-        if maxdepth == 0:
-            return
+    def tree_format(self, expectations:Expectations|None=None):
+        """Testgroup grades visualised as a tree.
+
+        'Grades.__str__()' uses this for the default string representation.
+
+        >>> grades = Grades(["secret/tiny/foo", "secret/tiny/bar", "secret/large/baz", "sample/1"])
+        >>> _ = grades.set_verdict("1", "AC")
+        >>> _ = grades.set_verdict("foo", "AC")
+        >>> _ = grades.set_verdict("bar", "AC")
+        >>> _ = grades.set_verdict("baz", "AC")
+        >>> print(grades)
+        data      ('AC', 4.0)
+        ├─sample  ('AC', 1.0)
+        └─secret  ('AC', 3.0)
+          ├─large ('AC', 1.0)
+          └─tiny  ('AC', 2.0)
+
+        When the grades violate expectations, mention that:
+
+        >>> expectations = Expectations("AC")
+        >>> expectations.is_expected('WA')
+        False
+        >>> grades = Grades(["sample/1", "secret/tc"])
+        >>> _ = grades.set_verdict("1", "AC")
+        >>> _ = grades.set_verdict("tc", "WA")
+        >>> print(grades.tree_format(expectations=expectations))
+        data     ('WA', 1.0), expected ({'AC'}, '-inf inf')
+        ├─sample ('AC', 1.0)
+        └─secret ('WA', 0.0)
+        """
         paddinglength = max(
-            3 * (len(Path(node).parts)) + len(node)
-            for node in self.tree.children
-            if node not in self.tree.leaves and len(Path(node).parts) <= maxdepth
+            2 * len(path.parts) + len(path.name)
+            for path in self.testdata.gradeables_for_group
+            if path not in self.testdata.cases
         )
-        self._rec_prettyprint_tree(self.tree.root, paddinglength, maxdepth)
+        return '\n'.join(self._rec(Path(), paddinglength, expectations=expectations))
+
+    def _rec(self, path, paddinglength, expectations=None, prefix='', last=True):
+        msg = (
+            ""
+            if expectations is None or expectations.is_expected(path)
+            else f", expected {expectations[path]}"
+        )
+        branch = '├─' if not last else '└─' if not path == Path() else 'data'
+        yield f"{prefix + branch +  path.name:{paddinglength}}" + f" {self.grade(path)}{msg}"
+        subgroups = list(
+            child
+            for child in self.testdata.gradeables_for_group[path]
+            if child not in self.testdata.cases
+        )
+        extension = '│ ' if not last else '  ' if not path == Path() else ''
+        for child, is_last in zip(subgroups, [False] * (len(subgroups) - 1) + [True]):
+            yield from self._rec(
+                child, paddinglength, prefix=prefix + extension, last=is_last
+            )
 
 
-def aggregate(path, grades, settings):
+def aggregate(grades, settings):
     """Given a list of grades and settings, determine the default grader's grade."""
     if not grades:
-        log(f'No grades on {path}, so no graders ran')
+        log('No grades given, so no graders ran')
         return ('AC', 0)
 
     if settings['on_reject'] == 'break':
         first_rejection = min(
-            (i for (i, grade) in enumerate(grades) if grade.verdict != "AC"), default=None
+            (i for (i, grade) in enumerate(grades) if grade[0] != "AC"), default=None
         )
         if first_rejection is not None:
             grades = grades[: first_rejection + 1]
@@ -310,10 +367,10 @@ def aggregate(path, grades, settings):
 def call_default_grader(grades, grader_flags=None):
     """Run the default grader to aggregate the given grades;
 
-    grades is a list of Grade objects
+    grades is a list of tuples
     """
 
-    grader_input = '\n'.join(f"{g.verdict} {g.score}" for g in grades)
+    grader_input = '\n'.join(f"{g[0]} {g[1]}" for g in grades)
     grader_flag_list = grader_flags.split() if grader_flags is not None else []
 
     grader = subprocess.Popen(
@@ -344,4 +401,10 @@ def call_default_grader(grades, grader_flags=None):
         return ('JE', None)
 
     verdict, score = grader_output.split()
-    return Grade(verdict, float(score))
+    return (verdict, float(score))
+
+
+if __name__ == "__main__":
+    import doctest
+
+    doctest.testmod()
