@@ -67,7 +67,11 @@ class Expectations:
     """The expectations for a submission."""
 
     def __init__(
-        self, expectations=None, expected_results=None, dirname=None, testdata_settings=None
+        self,
+        expectations: str | list[str] | dict | None = None,
+        expected_results: list[str] | None = None,
+        dirname: str | None = None,
+        testdata_settings: dict | None = None,
     ):
         """Expectations can be specified in three different ways:
         (1) from the submission directory where the source code is placed
@@ -110,41 +114,37 @@ class Expectations:
             if testdata_settings is not None
             else {}
         )
-        self._specified_verdicts:dict[Path, set[str]] = dict()
-        self._specified_scores:dict[Path, str] = dict()
+        self._specified_verdicts: dict[Path, set[str]] = dict()
+        self._specified_scores: dict[Path, str] = dict()
 
         # Populate _specified_{verdicts, scores} from expectations. This involves
         # recursively parsing the expectations, which may be a dict of dicts.
-        def walk(exp, path):
+        def walk(exp: dict | list[str] | str, path):
             if isinstance(exp, dict):
-                verdicts = exp.get('verdict')  # None, str, or list
-                scores = exp.get('score')
+                verdicts: str | list[str] | None = exp.pop('verdict', None)
+                scores = exp.pop('score', None)
                 for key in exp:  # 'sample', 'secret', 'edgecases', '003-random', ...
-                    if key in ['verdict', 'score']:
-                        continue
+                    if path == Path() and key not in ['sample', 'secret']:
+                        raise ValueError(f"Expected testgroup 'sample' or 'secret', not {key}")
                     walk(exp[key], path / key)
             else:
-                verdicts = exp  # None, str or list
+                verdicts = exp
                 scores = None
-            if verdicts is None:  # nothing specified for this path
+
+            if verdicts is None:  # no verdict specified for this path
+                if scores is not None:
+                    raise ValueError(f"At {path}, 'score' specified without 'verdict'")
                 return
+            self._specified_verdicts[path] = set(
+                [verdicts] if isinstance(verdicts, str) else verdicts
+            )
 
-            if isinstance(verdicts, str):
-                verdicts = [verdicts]  # now verdicts is a list of strings
-            self._specified_verdicts[path] = set(verdicts)
-
-            # scores can only set if verdict is also set
             if scores is not None:
-                if len(scores.split()) == 1:  # e.g., "24"; change to "24 24"
-                    scores = scores + ' ' + scores
-                # Sanity check: score should be a subrange of testdata settings' range
-                exp_lo, exp_hi = map(float, scores.split())
-                range_lo, range_hi = map(float, self.testdata_settings(path)['range'].split())
-                if not range_lo <= exp_lo <= exp_hi <= range_hi:
-                    raise ValueError(f"Expectation {scores} violates testdata setting")
+                self._check_scores(scores, path)
             self._specified_scores[path] = scores
 
-        walk(expectations, Path())
+        if expectations is not None:
+            walk(expectations, Path())
 
         # Now consider the two ways of setting the root expecation. First, look at dirname.
         dirnamemap = {
@@ -160,10 +160,10 @@ class Expectations:
             if dirname_verdict is not None:
                 raise ValueError(f"Don't set EXPECTED_RESULTS in directory {dirname}")
             domjudge_verdict_map = {
-                    'CORRECT': 'AC',
-                    'WRONG-ANSWER': 'WA',
-                    'TIMELIMIT': 'TLE',
-                    'RUN-ERROR': 'RTE',
+                'CORRECT': 'AC',
+                'WRONG-ANSWER': 'WA',
+                'TIMELIMIT': 'TLE',
+                'RUN-ERROR': 'RTE',
             }
             if not all(v in domjudge_verdict_map for v in expected_results):
                 raise ValueError(f"Invalid expected results {expected_results}")
@@ -183,10 +183,30 @@ class Expectations:
             else:
                 self._specified_verdicts[Path()] = root_verdict
 
+    def _check_scores(self, scores: str, path):
+        # Ensure that the scores make syntactic sense, like '24' or '0 100' or even '-inf 53.1',
+        # but not '3 0' or 'foo'. Also check that the don't violate the range given in
+        # testdata.yaml
 
+        # raises ValueError otherwise
+        try:
+            if len(scores.split()) == 1:
+                exp_lo = exp_hi = float(scores)
+            elif len(scores.split()) == 2:
+                exp_lo, exp_hi = map(float, scores.split())
+            else:
+                raise ValueError(f"Expected two space-separated tokens, not {scores}")
+        except ValueError as error:
+            raise ValueError(f"At {path}, failed to parse {scores}") from error
+
+        if exp_lo > exp_hi:
+            raise ValueError(f"Invalid score range at {path}: {exp_lo} > {exp_hi}")
+        range_lo, range_hi = map(float, self.testdata_settings(path)['range'].split())
+        if not range_lo <= exp_lo <= exp_hi <= range_hi:
+            raise ValueError(f"Expectation {scores} violates testdata setting")
 
     @lru_cache
-    def __getitem__(self, node:str):
+    def __getitem__(self, node: str):
         """The expecations for the given node.
 
         Arguments
@@ -258,7 +278,7 @@ class Expectations:
         )
         return parent_settings | (self._testdata_settings.get(path) or {})
 
-    def is_expected(self, grade:str | tuple[str, float], node=''):
+    def is_expected(self, grade: str | tuple[str, float], node=''):
         """Is the given grade expected by the given node?
 
         Arguments
@@ -282,6 +302,7 @@ class Expectations:
             score_ok = True
 
         return verdict in verdicts and score_ok
+
 
 if __name__ == "__main__":
     import doctest
