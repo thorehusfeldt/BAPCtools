@@ -119,29 +119,29 @@ class Expectations:
 
         # Populate _specified_{verdicts, scores} from expectations. This involves
         # recursively parsing the expectations, which may be a dict of dicts.
-        def walk(exp: dict | list[str] | str, path):
+        def walk(exp: dict | list[str] | str, path: Path):
             if isinstance(exp, dict):
-                verdicts: str | list[str] | None = exp.pop('verdict', None)
-                scores = exp.pop('score', None)
+                verdict: str | list[str] | None = exp.pop('verdict', None)
+                score:str = exp.pop('score', None)
                 for key in exp:  # 'sample', 'secret', 'edgecases', '003-random', ...
                     if path == Path() and key not in ['sample', 'secret']:
                         raise ValueError(f"Expected testgroup 'sample' or 'secret', not {key}")
                     walk(exp[key], path / key)
             else:
-                verdicts = exp
-                scores = None
+                verdict = exp
+                score = None
 
-            if verdicts is None:  # no verdict specified for this path
-                if scores is not None:
+            if verdict is None:  # no verdict specified for this path
+                if score is not None:
                     raise ValueError(f"At {path}, 'score' specified without 'verdict'")
                 return
             self._specified_verdicts[path] = set(
-                [verdicts] if isinstance(verdicts, str) else verdicts
+                [verdict] if isinstance(verdict, str) else verdict
             )
 
-            if scores is not None:
-                self._check_scores(scores, path)
-            self._specified_scores[path] = scores
+            if score is not None:
+                check_score(score, self.testdata_settings(path)['range'])
+            self._specified_scores[path] = score
 
         if expectations is not None:
             walk(expectations, Path())
@@ -182,28 +182,6 @@ class Expectations:
                     raise ValueError("Contradictory expectations for root")
             else:
                 self._specified_verdicts[Path()] = root_verdict
-
-    def _check_scores(self, scores: str, path):
-        # Ensure that the scores make syntactic sense, like '24' or '0 100' or even '-inf 53.1',
-        # but not '3 0' or 'foo'. Also check that the don't violate the range given in
-        # testdata.yaml
-
-        # raises ValueError otherwise
-        try:
-            if len(scores.split()) == 1:
-                exp_lo = exp_hi = float(scores)
-            elif len(scores.split()) == 2:
-                exp_lo, exp_hi = map(float, scores.split())
-            else:
-                raise ValueError(f"Expected two space-separated tokens, not {scores}")
-        except ValueError as error:
-            raise ValueError(f"At {path}, failed to parse {scores}") from error
-
-        if exp_lo > exp_hi:
-            raise ValueError(f"Invalid score range at {path}: {exp_lo} > {exp_hi}")
-        range_lo, range_hi = map(float, self.testdata_settings(path)['range'].split())
-        if not range_lo <= exp_lo <= exp_hi <= range_hi:
-            raise ValueError(f"Expectation {scores} violates testdata setting")
 
     @lru_cache
     def __getitem__(self, node: str):
@@ -302,6 +280,47 @@ class Expectations:
             score_ok = True
 
         return verdict in verdicts and score_ok
+
+def check_score(score: str, range_settings: str|None=None):
+    """ Ensure that the scores make syntactic sense, like '24' or '0 100' or even '-inf 53.1',
+     but not '3 0' or 'foo'. Also check that the don't violate the range given in
+     testdata.yaml
+
+    raises ValueError otherwise
+
+    >>> check_score("-inf inf")
+    >>> check_score("0 100")
+    >>> check_score("0 1 2")
+    Traceback (most recent call last):
+        ...
+    ValueError: Expected one or two space-separated tokens, not 0 1 2
+    >>> check_score("10 2")
+    Traceback (most recent call last):
+        ...
+    ValueError: Invalid score range: 10.0 > 2.0
+    >>> check_score("zero")
+    Traceback (most recent call last):
+        ...
+    ValueError: could not convert string to float: 'zero'
+    >>> check_score("0 42", "0 30")
+    Traceback (most recent call last):
+        ...
+    ValueError: Expectation 0 42 out of testdata setting range 0 30
+    """
+    if len(score.split()) == 1:
+        exp_lo = exp_hi = float(score)
+    elif len(score.split()) == 2:
+        exp_lo, exp_hi = map(float, score.split())
+    else:
+        raise ValueError(f"Expected one or two space-separated tokens, not {score}")
+
+    if exp_lo > exp_hi:
+        raise ValueError(f"Invalid score range: {exp_lo} > {exp_hi}")
+
+    if range_settings is not None:
+        range_lo, range_hi = map(float, range_settings.split())
+        if not range_lo <= exp_lo <= exp_hi <= range_hi:
+            raise ValueError(f"Expectation {score} out of testdata setting range {range_settings}")
 
 
 if __name__ == "__main__":
