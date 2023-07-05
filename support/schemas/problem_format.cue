@@ -4,29 +4,29 @@ import "strings"
 import "strconv"
 
 #testdata_settings: {
-	on_reject?: "break" | "continue"
-	grading?: "default" | "custom"
-	grader_flags?: string
-//	if grading != "custom" { grader_flags? : #default_grader_flags }
-	input_validator_flags?: string
-	output_validator_flags?: string
-	accept_score?: #score
-	reject_score?: #score
-	range?: #range 
+	on_reject: *"break" | "continue"
+	grading: *"default" | "custom"
+	grader_flags:  *"" | string
+    // next line crashes cue 0.5.0
+    //	if grading != "custom" { grader_flags? : #default_grader_flags }
+	input_alidator_flags: *"" | string
+	output_validator_flags: *"" |string
+	accept_score: *"1" | #score
+	reject_score: *"0" | #score
+	range: *"-inf +inf" | string
+    if range != null { 
+        // matches "-inf 5", "0 100", "1.4 1.7", "6 6", but not "5 1"
+        _valid: strings.Split(range, " ") & [#score, #score]   
+        _lo: strconv.ParseFloat(strings.Split(range, " ")[0], 64)  // parses to float (including '-inf')
+        _hi: strconv.ParseFloat(strings.Split(range, " ")[1], 64)
+        _order: true & _lo <= _hi
+        }
 }
 // matches "1", "06", "21", ".4", "-1.2", but not 'inf'
 #score: =~ "^-?([0-9]+|[0-9]*.[0-9]+)$" 
 
-// matches "-inf 5", "0 100", "1.4 1.7", "6 6", but not "5 1"
-#range: this={
-    string
-    _valid: strings.Split(this, " ") & [#score, #score]       // two space-separated #scores
-    _lo: strconv.ParseFloat(strings.Split(this, " ")[0], 64)  // parses to float (including '-inf')
-    _hi: strconv.ParseFloat(strings.Split(this, " ")[1], 64)
-    _order: true & _lo <= _hi
-}
-
-// TOOD: Could also enforce relations between accept_score and range
+// TOOD: Also enforce relations between accept_score and range, i.e., 
+// _lo <= reject_score <= accept_score <= _hi
 
 #filename: =~ "^[a-zA-Z0-9][a-zA-Z0-9_.-]*[a-zA-Z0-9]$"
 #path: =~ "[a-zA-Z0-9_.-/]*"
