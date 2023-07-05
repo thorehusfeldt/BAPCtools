@@ -1,6 +1,7 @@
 package problemformat
 
 import "strings"
+import "strconv"
 
 #testdata_settings: {
 	on_reject?: "break" | "continue"
@@ -11,10 +12,22 @@ import "strings"
 	output_validator_flags?: string
 	accept_score?: #score
 	reject_score?: #score
-	range?: string // could be much improved, good CUE exercise
+	range?: #range 
+}
+// matches "1", "06", "21", ".4", "-1.2", but not 'inf'
+#score: =~ "^-?([0-9]+|[0-9]*.[0-9]+)$" 
+
+// matches "-inf 5", "0 100", "1.4 1.7", "6 6", but not "5 1"
+#range: this={
+    string
+    _valid: strings.Split(this, " ") & [#score, #score]       // two space-separated #scores
+    _lo: strconv.ParseFloat(strings.Split(this, " ")[0], 64)  // parses to float (including '-inf')
+    _hi: strconv.ParseFloat(strings.Split(this, " ")[1], 64)
+    _order: true & _lo <= _hi
 }
 
-#score: =~ "^-?([0-9]+|[0-9]*.[0-9]+)$" // matches "1", "06", "21", ".4", "1.2", even negatives
+// TOOD: Could also enforce relations between accept_score and range
+
 #filename: =~ "^[a-zA-Z0-9][a-zA-Z0-9_.-]*[a-zA-Z0-9]$"
 #path: =~ "[a-zA-Z0-9_.-/]*"
 
