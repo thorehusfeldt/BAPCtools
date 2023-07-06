@@ -13,8 +13,7 @@ import "struct"
 }
 
 #testcase: 
-	#command |            // same as create: #command
-	null |                // deprecated
+	#command |            // same as generate: #command
 	{
 		generate?: #command // invocation of a generator
 		copy?:     #path 
