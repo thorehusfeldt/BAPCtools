@@ -7,21 +7,18 @@ import "struct"
 
 #command: !="" & (=~"^[^{}]*(\\{(name|seed(:[0-9]+)?)\\}[^{}]*)*$")
 #file_config: {
-	solution?:    #command | null // null disallowed (specify #testcase.ans instead)
+	solution?:    #command // null disallowed (specify #testcase.ans instead)
 	visualizer?:  #command | null // null means: skip visualisation
 	random_salt?: string
 }
 
-#testcase: #command |      // same as command: #command
-	null |                 // same as path: null
+#testcase: 
+	#command |            // same as create: #command
+	null |                // deprecated
 	{
-		command?: #command // invocation of a generator
-		path?:    #path |  // copy generators/path.{ext} to path/to/testcase{.ext} 
-			null           // leave path/to/testcase{.ext} alone
-		in?:   string      // explicitly given contents for .in
-		ans?:  string
-		desc?: string
-		hint?: string
+		generate?: #command // invocation of a generator
+		copy?:     #path 
+		["in" | "ans" | "desc" | "hint" ]: string // explicit contents
 		#file_config
 	} 
 
@@ -37,10 +34,10 @@ import "struct"
 	generators?: [string]: [...string]
 	#testgroup
 	... // Do allow unknown_key at top level for tooling
-} & 
-	{ data: close({
+} 
+
+#Generators: data: close({
 		// Restrict top level data to testgroups 'sample', 'secret'
 		sample: #testgroup
 		secret: #testgroup
 	})
-}
