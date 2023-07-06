@@ -23,11 +23,13 @@ import "struct"
 	} 
 
 #data_dict: [string]: #testgroup | #testcase
+#data_dict: struct.MinFields(1)                        // nonempty
+#singleton_data_dict: #data_dict & struct.MaxFields(1) // exactly one key
 
 #testgroup: {
+	"testdata.yaml"?: #testdata_settings        // TODO should this field be called testdata_settings or settings?
+	data: #data_dict | [...#singleton_data_dict]
 	#file_config
-	"testdata.yaml"?: #testdata_settings                                   // TODO should this field be testdata_settings or settings?
-	data:             #data_dict | [...{#data_dict & struct.MaxFields(1)}] // list of singleton dicts
 }
 
 #Generators: {
