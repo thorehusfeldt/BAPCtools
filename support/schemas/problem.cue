@@ -1,4 +1,6 @@
 #problem_settings: {
+    // Should these fields all also accept null? If so, what's the semantics of, say,
+    //     license:
     // TODO: typical-problem.yaml violates spec (name missing)
     // TODO: maximal-problem.yaml violates spec (name missing, validator should be validator_flags)
     name: string | { [string]: string }
@@ -7,7 +9,7 @@
     source?: string
     source_url?: string
     if source == null { source_url: null }
-    license?: *"unkown" | "public_domain" | "cc0" | "cc by" | "cc by-sa" | "educational" | "permission"
+    license?: *"unknown" | "public domain" | "cc0" | "cc by" | "cc by-sa" | "educational" | "permission"
     rights_owner?: string
     limits?: #limits
     validation: *"default" | 
@@ -18,7 +20,7 @@
     validator_flags?: string
     scoring: {
         objective: *"max" | "min"
-        show_test_data_groups: *false | bool
+        show_test_data_groups: *false | true
     }
     keywords?: string | [...string]
     uuid?: string
@@ -27,6 +29,7 @@
 
 #limits: { 
     // all are optional, right?
+    // is the empty limits dictionary valid? (I guess yes)
     time_multiplier?: *5 | int
     time_safety_margin?: *2 | int
     memory?: int
