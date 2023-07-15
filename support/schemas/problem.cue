@@ -4,21 +4,16 @@
     // TODO: typical-problem.yaml violates spec (name missing)
     // TODO: maximal-problem.yaml violates spec (name missing, validator should be validator_flags)
     name: string | { [string]: string }
-    type: *"pass-fail" | "scoring"
+    type?: *"pass-fail" | "scoring"
     author?: string
     source?: string
-    source_url?: string
-    if source == null { source_url: null }
+    if source != _|_ { source_url?: string } # only allow source_url if source is specified
     license?: *"unknown" | "public domain" | "cc0" | "cc by" | "cc by-sa" | "educational" | "permission"
     rights_owner?: string
     limits?: #limits
-    validation: *"default" | 
-        "custom" |
-        "custom interactive" | 
-        "custom score" | 
-        "custom interactive score"
+    validation?: *"default" | #custom_validation
     validator_flags?: string
-    scoring: {
+    scoring?: {
         objective: *"max" | "min"
         show_test_data_groups: *false | true
     }
@@ -27,9 +22,20 @@
     languages?: string | [...string]
 }
 
+#custom_validation: this={
+    string
+    _as_struct: { for w in strings.Split(this, " ")  { (w): _ } }
+    _as_struct: close({ 
+        custom: _,       // Must include "custom",
+        score?: _,       // can include "score" ...
+        interactive?: _  // ... and "interactive"
+})
+}
+
 #limits: { 
-    // all are optional, right?
-    // is the empty limits dictionary valid? (I guess yes)
+    // All are optional, right?
+    // Is the empty limits dictionary valid? (I guess yes)
+    // TODO: are these all ints?
     time_multiplier?: *5 | int
     time_safety_margin?: *2 | int
     memory?: int
